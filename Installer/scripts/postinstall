@@ -1,0 +1,19 @@
+#!/bin/bash
+# postinstall — runs after pkg installation
+# Restarts coreaudiod so the new driver is discovered immediately.
+
+set -e
+
+HAL_DIR="/Library/Audio/Plug-Ins/HAL"
+DRIVER="$HAL_DIR/VirtualMic.driver"
+
+# Fix ownership
+chown -R root:wheel "$DRIVER"
+chmod -R 755 "$DRIVER"
+
+# Restart CoreAudio daemon
+launchctl kickstart -kp system/com.apple.audio.coreaudiod 2>/dev/null || \
+    killall -9 coreaudiod 2>/dev/null || true
+
+echo "VirtualMic driver installed successfully."
+exit 0

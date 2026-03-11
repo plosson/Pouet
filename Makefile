@@ -1,0 +1,151 @@
+# Makefile — VirtualMic Audio Server Plugin + companion app
+#
+# Requirements:
+#   - macOS 12+ SDK (Xcode Command Line Tools)
+#   - Apple Developer ID certificate for code-signing
+#   - Developer ID Installer certificate for pkg signing
+#
+# Usage:
+#   make                  # build everything (unsigned)
+#   make sign             # build + sign driver & app
+#   make pkg              # build + sign + create installer pkg
+#   make install          # install driver locally for testing (requires sudo)
+#   make uninstall        # remove driver
+#   make clean
+
+BUNDLE_ID     = com.virtualmicdrv.driver
+APP_BUNDLE_ID = com.virtualmicdrv.app
+VERSION       = 1.0.0
+
+# ---- Paths ----
+DRIVER_SRC    = Driver/VirtualMicDriver.c
+DRIVER_BUNDLE = build/VirtualMic.driver
+DRIVER_BINARY = $(DRIVER_BUNDLE)/Contents/MacOS/VirtualMicDriver
+DRIVER_PLIST  = Driver/VirtualMic.driver/Contents/Info.plist
+
+APP_SRC       = App/main.swift
+APP_BINARY    = build/VirtualMicApp
+
+PKG_ROOT      = build/pkg_root
+PKG_OUT       = build/VirtualMic-$(VERSION).pkg
+
+HAL_DIR       = /Library/Audio/Plug-Ins/HAL
+
+# ---- Signing identities (set via env or override) ----
+DEVID         ?= "Developer ID Application: Your Name (TEAMID)"
+INSTALLER_ID  ?= "Developer ID Installer: Your Name (TEAMID)"
+
+# ---- Compiler flags ----
+CC            = clang
+CFLAGS        = -arch arm64 -arch x86_64 \
+                -mmacosx-version-min=12.0 \
+                -O2 -fvisibility=hidden \
+                -Wall -Wextra \
+                -framework CoreAudio \
+                -framework CoreFoundation
+
+SWIFTC        = swiftc
+SWIFTFLAGS    = -target arm64-apple-macos12.0 \
+                -sdk $(shell xcrun --show-sdk-path) \
+                -O
+
+# ============================================================
+.PHONY: all driver app sign pkg install uninstall clean
+
+all: driver app
+
+# ---- Driver bundle ----
+driver: $(DRIVER_BINARY)
+
+$(DRIVER_BINARY): $(DRIVER_SRC) $(DRIVER_PLIST)
+	@mkdir -p $(DRIVER_BUNDLE)/Contents/MacOS
+	@mkdir -p $(DRIVER_BUNDLE)/Contents/Resources
+	$(CC) $(CFLAGS) \
+	    -dynamiclib \
+	    -install_name "@rpath/VirtualMicDriver" \
+	    -exported_symbols_list Driver/exports.lds \
+	    -o $(DRIVER_BINARY) \
+	    $(DRIVER_SRC)
+	@cp $(DRIVER_PLIST) $(DRIVER_BUNDLE)/Contents/Info.plist
+	@echo "✓ Driver bundle built → $(DRIVER_BUNDLE)"
+
+# ---- Companion app ----
+app: $(APP_BINARY)
+
+$(APP_BINARY): $(APP_SRC)
+	@mkdir -p build
+	$(SWIFTC) $(SWIFTFLAGS) \
+	    -import-objc-header App/shm_bridge.h \
+	    -framework AVFoundation \
+	    -framework Foundation \
+	    -framework Accelerate \
+	    -framework CoreAudio \
+	    -framework AudioToolbox \
+	    -o $(APP_BINARY) \
+	    $(APP_SRC)
+	codesign --force --sign - --entitlements App/entitlements.plist $(APP_BINARY)
+	@echo "✓ App binary built → $(APP_BINARY)"
+
+# ---- Code signing ----
+sign: all
+	codesign --force --options runtime \
+	    --sign $(DEVID) \
+	    --identifier $(BUNDLE_ID) \
+	    $(DRIVER_BUNDLE)
+	codesign --force --options runtime \
+	    --sign $(DEVID) \
+	    --identifier $(APP_BUNDLE_ID) \
+	    $(APP_BINARY)
+	@echo "✓ Signed"
+
+# ---- Notarize (fill in your Apple ID + app-specific password) ----
+notarize: sign
+	@echo "Zipping for notarization …"
+	ditto -c -k --keepParent $(DRIVER_BUNDLE) build/VirtualMic_driver.zip
+	xcrun notarytool submit build/VirtualMic_driver.zip \
+	    --apple-id "$$APPLE_ID" \
+	    --password "$$APPLE_APP_PASSWORD" \
+	    --team-id "$$TEAM_ID" \
+	    --wait
+	xcrun stapler staple $(DRIVER_BUNDLE)
+	@echo "✓ Notarized"
+
+# ---- Installer package ----
+pkg: sign
+	@rm -rf $(PKG_ROOT)
+	@mkdir -p $(PKG_ROOT)$(HAL_DIR)
+	@mkdir -p $(PKG_ROOT)/usr/local/bin
+	@cp -R $(DRIVER_BUNDLE) $(PKG_ROOT)$(HAL_DIR)/
+	@cp    $(APP_BINARY)    $(PKG_ROOT)/usr/local/bin/VirtualMicApp
+	pkgbuild \
+	    --root $(PKG_ROOT) \
+	    --identifier $(BUNDLE_ID) \
+	    --version $(VERSION) \
+	    --scripts Installer/scripts \
+	    build/VirtualMic_component.pkg
+	productbuild \
+	    --distribution Installer/distribution.xml \
+	    --package-path build \
+	    --sign $(INSTALLER_ID) \
+	    $(PKG_OUT)
+	@echo "✓ Installer → $(PKG_OUT)"
+
+# ---- Local install for testing ----
+install: driver app
+	sudo mkdir -p $(HAL_DIR)
+	sudo rm -rf $(HAL_DIR)/VirtualMic.driver
+	sudo cp -R $(DRIVER_BUNDLE) $(HAL_DIR)/
+	sudo chown -R root:wheel $(HAL_DIR)/VirtualMic.driver
+	sudo cp $(APP_BINARY) /usr/local/bin/VirtualMicApp
+	sudo killall -9 coreaudiod 2>/dev/null || true
+	@sleep 2
+	@echo "✓ Installed. Virtual mic should appear in Sound settings."
+
+uninstall:
+	sudo rm -rf $(HAL_DIR)/VirtualMic.driver
+	sudo rm -f  /usr/local/bin/VirtualMicApp
+	sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod
+	@echo "✓ Uninstalled."
+
+clean:
+	rm -rf build

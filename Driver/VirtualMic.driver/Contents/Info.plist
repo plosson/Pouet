@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.virtualmicdrv.driver</string>
+    <key>CFBundleName</key>
+    <string>VirtualMic</string>
+    <key>CFBundleVersion</key>
+    <string>1.0.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+    <key>CFBundleExecutable</key>
+    <string>VirtualMicDriver</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>MacOSX</string>
+    </array>
+
+    <!-- CFPlugInFactories: maps our factory UUID to the C entry point -->
+    <key>CFPlugInFactories</key>
+    <dict>
+        <key>A4B3C2D1-E5F6-7890-ABCD-EF1234567890</key>
+        <string>VirtualMicDriverFactory</string>
+    </dict>
+
+    <!-- CFPlugInTypes: maps kAudioServerPlugInTypeUUID to our factory -->
+    <key>CFPlugInTypes</key>
+    <dict>
+        <key>443ABAB8-E7B3-491A-B985-BEB9187030DB</key>
+        <array>
+            <string>A4B3C2D1-E5F6-7890-ABCD-EF1234567890</string>
+        </array>
+    </dict>
+
+    <key>AudioServerPlugIn_MachServices</key>
+    <array/>
+
+    <key>sandboxSafe</key>
+    <true/>
+</dict>
+</plist>
