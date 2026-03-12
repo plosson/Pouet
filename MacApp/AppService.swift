@@ -12,6 +12,8 @@ struct AppConfig: Codable {
     var selectedDevice: String?
     var soundsDir: String
     var injectVolume: Float?
+    var selectedOutputDevice: String?
+    var dashcamBufferSeconds: Double?
 
     static let defaultPath = NSHomeDirectory() + "/.virtualmicapp.json"
     static let defaultSoundsDir = NSHomeDirectory() + "/VirtualMicSounds"
@@ -53,6 +55,15 @@ class AppService: ObservableObject {
     @Published var micPeakLevel: Float = 0.0
     @Published var injectPeakLevel: Float = 0.0
 
+    // Dashcam state
+    @Published var speakerProxyRunning = false
+    @Published var speakerProxyDeviceName: String?
+    @Published var selectedOutputDevice: String = ""
+    @Published var outputDevices: [AudioDeviceInfo] = []
+    @Published var dashcamBufferSeconds: Double = 5.0
+    @Published var speakerPeakLevel: Float = 0.0
+    @Published var lastSnapshotURL: URL?
+
     private var config: AppConfig
     private var pollTimer: Timer?
 
@@ -63,6 +74,7 @@ class AppService: ObservableObject {
         self.config = AppConfig.load()
         self.soundsDir = config.soundsDir
         self.volume = config.injectVolume ?? 1.0
+        self.dashcamBufferSeconds = config.dashcamBufferSeconds ?? 5.0
 
         // Ensure sounds directory exists
         try? FileManager.default.createDirectory(
@@ -76,6 +88,7 @@ class AppService: ObservableObject {
     func start() {
         isRunning = true
         loadDevices()
+        loadOutputDevices()
         refreshSounds()
 
         // Auto-start proxy if device was previously saved
@@ -91,14 +104,29 @@ class AppService: ObservableObject {
             }
         }
 
+        // Auto-start speaker proxy if output device was previously saved
+        if let savedOutput = config.selectedOutputDevice,
+           let device = audio.findOutputDevice(matching: savedOutput) {
+            selectedOutputDevice = device.name
+            do {
+                try audio.startSpeakerProxy(deviceID: device.id, deviceName: device.name, bufferDuration: dashcamBufferSeconds)
+                speakerProxyRunning = true
+                speakerProxyDeviceName = device.name
+            } catch {
+                print("[AppService] Auto-start speaker proxy failed: \(error)")
+            }
+        }
+
         startPolling()
     }
 
     func shutdown() {
         stopPolling()
         audio.stopProxy()
+        audio.stopSpeakerProxy()
         isRunning = false
         proxyRunning = false
+        speakerProxyRunning = false
     }
 
     // MARK: - Devices
@@ -109,6 +137,16 @@ class AppService: ObservableObject {
             let devs = self.audio.listDevices()
             DispatchQueue.main.async {
                 self.devices = devs
+            }
+        }
+    }
+
+    func loadOutputDevices() {
+        DispatchQueue.global().async { [weak self] in
+            guard let self = self else { return }
+            let devs = self.audio.listOutputDevices()
+            DispatchQueue.main.async {
+                self.outputDevices = devs
             }
         }
     }
@@ -134,6 +172,72 @@ class AppService: ObservableObject {
         proxyDeviceName = nil
         // Refresh devices (may have changed while proxy held the device)
         loadDevices()
+    }
+
+    // MARK: - Speaker Proxy (Dashcam)
+
+    func startSpeakerProxy(deviceName: String) throws {
+        guard let device = audio.findOutputDevice(matching: deviceName) else {
+            throw NSError(domain: "AppService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Output device not found: \(deviceName)"])
+        }
+        do {
+            try audio.startSpeakerProxy(deviceID: device.id, deviceName: device.name, bufferDuration: dashcamBufferSeconds)
+            speakerProxyRunning = true
+            speakerProxyDeviceName = device.name
+            selectedOutputDevice = device.name
+            config.selectedOutputDevice = device.name
+            config.save()
+        } catch {
+            speakerProxyRunning = false
+            speakerProxyDeviceName = nil
+            throw error
+        }
+    }
+
+    func stopSpeakerProxy() {
+        audio.stopSpeakerProxy()
+        speakerProxyRunning = false
+        speakerProxyDeviceName = nil
+        loadOutputDevices()
+    }
+
+    func setDashcamBufferSeconds(_ seconds: Double) {
+        dashcamBufferSeconds = max(1, min(30, seconds))
+        config.dashcamBufferSeconds = dashcamBufferSeconds
+        config.save()
+
+        // Restart proxy with new buffer duration if running
+        if speakerProxyRunning, let deviceName = speakerProxyDeviceName {
+            audio.stopSpeakerProxy()
+            do {
+                try audio.startSpeakerProxy(deviceID: audio.findOutputDevice(matching: deviceName)!.id,
+                                            deviceName: deviceName, bufferDuration: dashcamBufferSeconds)
+            } catch {
+                speakerProxyRunning = false
+                speakerProxyDeviceName = nil
+                print("[AppService] Failed to restart speaker proxy: \(error)")
+            }
+        }
+    }
+
+    func saveDashcamSnapshot() -> URL? {
+        let snapshotDir = (NSHomeDirectory() as NSString).appendingPathComponent("VirtualMicDashcam")
+        try? FileManager.default.createDirectory(atPath: snapshotDir, withIntermediateDirectories: true)
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let filename = "dashcam_\(formatter.string(from: Date())).m4a"
+        let url = URL(fileURLWithPath: (snapshotDir as NSString).appendingPathComponent(filename))
+
+        do {
+            try audio.saveDashcamSnapshot(to: url)
+            lastSnapshotURL = url
+            return url
+        } catch {
+            print("[AppService] Dashcam snapshot failed: \(error)")
+            return nil
+        }
     }
 
     // MARK: - Volume
@@ -201,6 +305,7 @@ class AppService: ObservableObject {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
     var virtualMicVisible: Bool { audio.virtualMicVisible }
+    var speakerShmAvailable: Bool { audio.speakerRing != nil }
     var shmAvailable: Bool { audio.mainRing != nil && audio.injectRing != nil }
 
     private func startPolling() {
@@ -212,6 +317,7 @@ class AppService: ObservableObject {
             self.injectAvailableSamples = self.audio.injectRingAvailableSamples
             self.micPeakLevel = self.audio.micPeakLevel
             self.injectPeakLevel = self.audio.injectPeakLevel
+            self.speakerPeakLevel = self.audio.speakerPeakLevel
 
             // Clear playing state when inject buffer drains
             if self.currentlyPlaying != nil && self.injectAvailableSamples == 0 {

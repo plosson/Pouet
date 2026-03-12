@@ -10,6 +10,7 @@ import AudioToolbox
 
 let SHM_NAME         = "/VirtualMicAudio"
 let SHM_INJECT_NAME  = "/VirtualMicInject"
+let SHM_SPEAKER_NAME = "/VirtualSpeakerAudio"
 let SHM_DATA_SIZE    = 4096 * 256
 let SAMPLE_RATE      = 48000.0
 let NUM_CHANNELS: UInt32 = 2
@@ -327,7 +328,197 @@ class MicProxy {
     }
 }
 
+// MARK: - Rolling Audio Buffer (dashcam)
+
+class RollingAudioBuffer {
+    let durationSeconds: Double
+    private let capacity: Int
+    private let buffer: UnsafeMutablePointer<Float>
+    private var writePos: Int = 0
+    private var totalWritten: UInt64 = 0
+
+    init(durationSeconds: Double = 5.0, sampleRate: Double = 48000.0, channels: Int = 2) {
+        self.durationSeconds = durationSeconds
+        self.capacity = Int(sampleRate * Double(channels) * durationSeconds)
+        self.buffer = UnsafeMutablePointer<Float>.allocate(capacity: self.capacity)
+        self.buffer.initialize(repeating: 0, count: self.capacity)
+    }
+
+    deinit { buffer.deallocate() }
+
+    /// Called from audio callback — lock-free, real-time safe
+    func append(_ samples: UnsafePointer<Float>, count: Int) {
+        let cap = capacity
+        for i in 0..<count {
+            buffer[writePos] = samples[i]
+            writePos = (writePos + 1) % cap
+        }
+        totalWritten += UInt64(count)
+    }
+
+    /// Snapshot the rolling buffer contents in chronological order (main thread)
+    func snapshot() -> [Float] {
+        let filled = min(Int(totalWritten), capacity)
+        var result = [Float](repeating: 0, count: filled)
+        let start = (writePos - filled + capacity) % capacity
+        for i in 0..<filled {
+            result[i] = buffer[(start + i) % capacity]
+        }
+        return result
+    }
+}
+
+// MARK: - Speaker Proxy (dashcam)
+
+class SpeakerProxy {
+    let outputDeviceID: AudioDeviceID
+    let speakerRing: SharedRingBuffer
+    let rollingBuffer: RollingAudioBuffer
+    var audioUnit: AudioComponentInstance?
+    var speakerPeakLevel: Float = 0.0
+    fileprivate let readBufCapacity = 4096
+    fileprivate var readBuf: UnsafeMutablePointer<Float>
+
+    init(outputDeviceID: AudioDeviceID, speakerRing: SharedRingBuffer, rollingBuffer: RollingAudioBuffer) {
+        self.outputDeviceID = outputDeviceID
+        self.speakerRing = speakerRing
+        self.rollingBuffer = rollingBuffer
+        self.readBuf = UnsafeMutablePointer<Float>.allocate(capacity: readBufCapacity)
+        self.readBuf.initialize(repeating: 0, count: readBufCapacity)
+    }
+
+    func start() throws {
+        var desc = AudioComponentDescription(
+            componentType: kAudioUnitType_Output,
+            componentSubType: kAudioUnitSubType_HALOutput,
+            componentManufacturer: kAudioUnitManufacturer_Apple,
+            componentFlags: 0, componentFlagsMask: 0
+        )
+        guard let comp = AudioComponentFindNext(nil, &desc) else {
+            throw NSError(domain: "SpeakerProxy", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No HALOutput component"])
+        }
+        var au: AudioComponentInstance?
+        var status = AudioComponentInstanceNew(comp, &au)
+        guard status == noErr, let unit = au else {
+            throw NSError(domain: "SpeakerProxy", code: Int(status))
+        }
+        audioUnit = unit
+
+        // Enable output on bus 0
+        var enableIO: UInt32 = 1
+        status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO,
+                                      kAudioUnitScope_Output, 0, &enableIO,
+                                      UInt32(MemoryLayout<UInt32>.size))
+        guard status == noErr else { throw NSError(domain: "EnableOutput", code: Int(status)) }
+
+        // Disable input on bus 1
+        var disableIO: UInt32 = 0
+        status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO,
+                                      kAudioUnitScope_Input, 1, &disableIO,
+                                      UInt32(MemoryLayout<UInt32>.size))
+        guard status == noErr else { throw NSError(domain: "DisableInput", code: Int(status)) }
+
+        // Set output device
+        var devID = outputDeviceID
+        status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+                                      kAudioUnitScope_Global, 0, &devID,
+                                      UInt32(MemoryLayout<AudioDeviceID>.size))
+        guard status == noErr else { throw NSError(domain: "SetDevice", code: Int(status)) }
+
+        // Set stream format
+        var streamFormat = AudioStreamBasicDescription(
+            mSampleRate: SAMPLE_RATE,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagsNativeEndian | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: UInt32(MemoryLayout<Float>.size * Int(NUM_CHANNELS)),
+            mFramesPerPacket: 1,
+            mBytesPerFrame: UInt32(MemoryLayout<Float>.size * Int(NUM_CHANNELS)),
+            mChannelsPerFrame: NUM_CHANNELS,
+            mBitsPerChannel: 32, mReserved: 0
+        )
+        status = AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat,
+                                      kAudioUnitScope_Input, 0, &streamFormat,
+                                      UInt32(MemoryLayout<AudioStreamBasicDescription>.size))
+        guard status == noErr else { throw NSError(domain: "SetFormat", code: Int(status)) }
+
+        // Set render callback
+        var callbackStruct = AURenderCallbackStruct(
+            inputProc: speakerProxyRenderCallback,
+            inputProcRefCon: Unmanaged.passUnretained(self).toOpaque()
+        )
+        status = AudioUnitSetProperty(unit, kAudioUnitProperty_SetRenderCallback,
+                                      kAudioUnitScope_Input, 0, &callbackStruct,
+                                      UInt32(MemoryLayout<AURenderCallbackStruct>.size))
+        guard status == noErr else { throw NSError(domain: "SetCallback", code: Int(status)) }
+
+        status = AudioUnitInitialize(unit)
+        guard status == noErr else { throw NSError(domain: "InitUnit", code: Int(status)) }
+
+        status = AudioOutputUnitStart(unit)
+        guard status == noErr else { throw NSError(domain: "StartUnit", code: Int(status)) }
+    }
+
+    func stop() {
+        if let unit = audioUnit {
+            AudioOutputUnitStop(unit)
+            AudioComponentInstanceDispose(unit)
+            audioUnit = nil
+        }
+        readBuf.deallocate()
+    }
+}
+
 // MARK: - Audio Callbacks
+
+private func speakerProxyRenderCallback(
+    inRefCon: UnsafeMutableRawPointer,
+    ioActionFlags: UnsafeMutablePointer<AudioUnitRenderActionFlags>,
+    inTimeStamp: UnsafePointer<AudioTimeStamp>,
+    inBusNumber: UInt32,
+    inNumberFrames: UInt32,
+    ioData: UnsafeMutablePointer<AudioBufferList>?
+) -> OSStatus {
+    let proxy = Unmanaged<SpeakerProxy>.fromOpaque(inRefCon).takeUnretainedValue()
+    guard let bufList = ioData else { return noErr }
+
+    let numSamples = Int(inNumberFrames) * Int(NUM_CHANNELS)
+    let abl = UnsafeMutableAudioBufferListPointer(bufList)
+
+    // Read from VirtualSpeaker SHM
+    let read = proxy.speakerRing.read(into: proxy.readBuf, maxSamples: numSamples)
+
+    // Feed rolling buffer for dashcam
+    if read > 0 {
+        proxy.rollingBuffer.append(proxy.readBuf, count: read)
+
+        // Compute peak level
+        var peak: Float = 0.0
+        for i in 0..<read {
+            let v = abs(proxy.readBuf[i])
+            if v > peak { peak = v }
+        }
+        proxy.speakerPeakLevel = peak
+    } else {
+        proxy.speakerPeakLevel = 0.0
+    }
+
+    // Write to output device
+    for buf in abl {
+        if let data = buf.mData?.assumingMemoryBound(to: Float.self) {
+            let count = Int(buf.mDataByteSize) / MemoryLayout<Float>.size
+            let toCopy = min(count, read)
+            if toCopy > 0 {
+                memcpy(data, proxy.readBuf, toCopy * MemoryLayout<Float>.size)
+            }
+            // Zero-fill remainder
+            if toCopy < count {
+                memset(data + toCopy, 0, (count - toCopy) * MemoryLayout<Float>.size)
+            }
+        }
+    }
+    return noErr
+}
 
 private func micInputCallback(
     inRefCon: UnsafeMutableRawPointer,
@@ -417,6 +608,23 @@ private func speakerOutputCallback(
     return noErr
 }
 
+// MARK: - CoreAudio Property Helpers
+
+private func getAudioDeviceStringProperty(_ devID: AudioDeviceID, selector: AudioObjectPropertySelector) -> String? {
+    var addr = AudioObjectPropertyAddress(
+        mSelector: selector,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain
+    )
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(devID, &addr, 0, nil, &size) == noErr, size > 0 else { return nil }
+    let buf = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<CFString>.alignment)
+    defer { buf.deallocate() }
+    guard AudioObjectGetPropertyData(devID, &addr, 0, nil, &size, buf) == noErr else { return nil }
+    let cfStr = Unmanaged<CFString>.fromOpaque(buf.load(as: UnsafeRawPointer.self)).takeUnretainedValue()
+    return cfStr as String
+}
+
 // MARK: - AudioService
 
 class AudioService {
@@ -476,28 +684,11 @@ class AudioService {
             for buf in bufList { totalChannels += Int(buf.mNumberChannels) }
             if totalChannels == 0 { continue }
 
-            var nameAddr = AudioObjectPropertyAddress(
-                mSelector: kAudioObjectPropertyName,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            var nameRef: CFString = "" as CFString
-            var nameSize = UInt32(MemoryLayout<CFString>.size)
-            AudioObjectGetPropertyData(devID, &nameAddr, 0, nil, &nameSize, &nameRef)
-
-            var uidAddr = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyDeviceUID,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            var uidRef: CFString = "" as CFString
-            var uidSize = UInt32(MemoryLayout<CFString>.size)
-            AudioObjectGetPropertyData(devID, &uidAddr, 0, nil, &uidSize, &uidRef)
-
-            let uid = uidRef as String
+            let name = getAudioDeviceStringProperty(devID, selector: kAudioObjectPropertyName) ?? ""
+            let uid = getAudioDeviceStringProperty(devID, selector: kAudioDevicePropertyDeviceUID) ?? ""
             if uid.contains("VirtualMic") { continue }
 
-            result.append(AudioDeviceInfo(id: devID, name: nameRef as String, uid: uid, inputChannels: totalChannels))
+            result.append(AudioDeviceInfo(id: devID, name: name, uid: uid, inputChannels: totalChannels))
         }
         return result
     }
@@ -538,6 +729,129 @@ class AudioService {
     var injectVolume: Float {
         get { proxy?.injectVolume ?? 1.0 }
         set { proxy?.injectVolume = newValue }
+    }
+
+    // MARK: - Speaker Proxy (dashcam)
+
+    private(set) var speakerRing: SharedRingBuffer?
+    private(set) var speakerProxy: SpeakerProxy?
+    private(set) var speakerProxyDeviceName: String?
+
+    var isSpeakerProxyRunning: Bool { speakerProxy != nil }
+
+    func listOutputDevices() -> [AudioDeviceInfo] {
+        var propAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize) == noErr else { return [] }
+
+        let deviceCount = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize, &deviceIDs) == noErr else { return [] }
+
+        var result: [AudioDeviceInfo] = []
+        for devID in deviceIDs {
+            var outputAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreamConfiguration,
+                mScope: kAudioDevicePropertyScopeOutput,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var bufSize: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(devID, &outputAddr, 0, nil, &bufSize) == noErr,
+                  bufSize > 0 else { continue }
+
+            let bufListPtr = UnsafeMutablePointer<AudioBufferList>.allocate(
+                capacity: Int(bufSize) / MemoryLayout<AudioBufferList>.size + 1)
+            defer { bufListPtr.deallocate() }
+            guard AudioObjectGetPropertyData(devID, &outputAddr, 0, nil, &bufSize, bufListPtr) == noErr else { continue }
+
+            let bufList = UnsafeMutableAudioBufferListPointer(bufListPtr)
+            var totalChannels = 0
+            for buf in bufList { totalChannels += Int(buf.mNumberChannels) }
+            if totalChannels == 0 { continue }
+
+            let name = getAudioDeviceStringProperty(devID, selector: kAudioObjectPropertyName) ?? ""
+            let uid = getAudioDeviceStringProperty(devID, selector: kAudioDevicePropertyDeviceUID) ?? ""
+            // Exclude our own virtual devices
+            if uid.contains("VirtualMic") || uid.contains("VirtualSpeaker") { continue }
+
+            result.append(AudioDeviceInfo(id: devID, name: name, uid: uid, inputChannels: totalChannels))
+        }
+        return result
+    }
+
+    func findOutputDevice(matching query: String) -> AudioDeviceInfo? {
+        let devices = listOutputDevices()
+        if let exact = devices.first(where: { $0.name.lowercased() == query.lowercased() }) {
+            return exact
+        }
+        return devices.first(where: { $0.name.lowercased().contains(query.lowercased()) })
+    }
+
+    func startSpeakerProxy(deviceID: AudioDeviceID, deviceName: String, bufferDuration: Double = 5.0) throws {
+        stopSpeakerProxy()
+
+        if speakerRing == nil {
+            speakerRing = try SharedRingBuffer(name: SHM_SPEAKER_NAME)
+            speakerRing?.clear()
+        }
+        guard let ring = speakerRing else {
+            throw NSError(domain: "AudioService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Speaker SHM not initialized"])
+        }
+
+        let rolling = RollingAudioBuffer(durationSeconds: bufferDuration, sampleRate: SAMPLE_RATE, channels: Int(NUM_CHANNELS))
+        let proxy = SpeakerProxy(outputDeviceID: deviceID, speakerRing: ring, rollingBuffer: rolling)
+        try proxy.start()
+        speakerProxy = proxy
+        speakerProxyDeviceName = deviceName
+    }
+
+    func stopSpeakerProxy() {
+        speakerProxy?.stop()
+        speakerProxy = nil
+        speakerProxyDeviceName = nil
+        speakerRing?.clear()
+    }
+
+    var speakerPeakLevel: Float { speakerProxy?.speakerPeakLevel ?? 0.0 }
+
+    func saveDashcamSnapshot(to url: URL) throws {
+        guard let rolling = speakerProxy?.rollingBuffer else {
+            throw NSError(domain: "AudioService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Speaker proxy not running"])
+        }
+        let samples = rolling.snapshot()
+        if samples.isEmpty { return }
+
+        let frameCount = samples.count / Int(NUM_CHANNELS)
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: SAMPLE_RATE,
+            channels: NUM_CHANNELS,
+            interleaved: true
+        ) else { return }
+
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount)) else { return }
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+
+        if let channelData = buffer.floatChannelData {
+            _ = samples.withUnsafeBufferPointer { src in
+                memcpy(channelData[0], src.baseAddress!, samples.count * MemoryLayout<Float>.size)
+            }
+        }
+
+        let file = try AVAudioFile(forWriting: url, settings: [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: SAMPLE_RATE,
+            AVNumberOfChannelsKey: NUM_CHANNELS,
+        ])
+        try file.write(from: buffer)
     }
 
     // MARK: - Audio Injection
@@ -587,15 +901,8 @@ class AudioService {
         guard AudioObjectGetPropertyData(
             AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize, &ids) == noErr else { return false }
         for devID in ids {
-            var uidAddr = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyDeviceUID,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            var uidRef: CFString = "" as CFString
-            var uidSize = UInt32(MemoryLayout<CFString>.size)
-            if AudioObjectGetPropertyData(devID, &uidAddr, 0, nil, &uidSize, &uidRef) == noErr {
-                if (uidRef as String).contains("VirtualMic") { return true }
+            if let uid = getAudioDeviceStringProperty(devID, selector: kAudioDevicePropertyDeviceUID) {
+                if uid.contains("VirtualMic") || uid.contains("VirtualSpeaker") { return true }
             }
         }
         return false

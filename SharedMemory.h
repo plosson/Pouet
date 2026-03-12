@@ -7,6 +7,7 @@
 #include <stdatomic.h>
 
 #define VIRTUALMICDRV_SHM_NAME    "/VirtualMicAudio"
+#define VIRTUALSPEAKER_SHM_NAME   "/VirtualSpeakerAudio"
 #define VIRTUALMICDRV_SHM_SIZE    (4096 * 256)    // ~1 s at 48 kHz stereo f32
 #define VIRTUALMICDRV_SAMPLE_RATE  48000.0
 #define VIRTUALMICDRV_NUM_CHANNELS 2
