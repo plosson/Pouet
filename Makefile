@@ -23,7 +23,7 @@ DRIVER_BUNDLE = build/VirtualMic.driver
 DRIVER_BINARY = $(DRIVER_BUNDLE)/Contents/MacOS/VirtualMicDriver
 DRIVER_PLIST  = Driver/VirtualMic.driver/Contents/Info.plist
 
-APP_SRC       = App/main.swift
+APP_SRC       = App/main.swift App/server.swift
 APP_BINARY    = build/VirtualMicApp
 
 PKG_ROOT      = build/pkg_root

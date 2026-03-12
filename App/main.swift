@@ -399,19 +399,38 @@ class MicProxy {
             var outUnit: AudioComponentInstance?
             if AudioComponentInstanceNew(outComp, &outUnit) == noErr, let ou = outUnit {
                 outputUnit = ou
-                AudioUnitSetProperty(ou, kAudioUnitProperty_StreamFormat,
-                                     kAudioUnitScope_Input, 0, &streamFormat,
+
+                // Set stream format to match our inject audio (48kHz stereo float32 interleaved)
+                var outFormat = AudioStreamBasicDescription(
+                    mSampleRate: SAMPLE_RATE,
+                    mFormatID: kAudioFormatLinearPCM,
+                    mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagsNativeEndian | kAudioFormatFlagIsPacked,
+                    mBytesPerPacket: UInt32(MemoryLayout<Float>.size * Int(NUM_CHANNELS)),
+                    mFramesPerPacket: 1,
+                    mBytesPerFrame: UInt32(MemoryLayout<Float>.size * Int(NUM_CHANNELS)),
+                    mChannelsPerFrame: NUM_CHANNELS,
+                    mBitsPerChannel: 32,
+                    mReserved: 0
+                )
+                var s = AudioUnitSetProperty(ou, kAudioUnitProperty_StreamFormat,
+                                     kAudioUnitScope_Input, 0, &outFormat,
                                      UInt32(MemoryLayout<AudioStreamBasicDescription>.size))
+                if s != noErr { print("Warning: output format set failed: \(s)") }
 
                 var renderCallback = AURenderCallbackStruct(
                     inputProc: outputRenderCallback,
                     inputProcRefCon: Unmanaged.passUnretained(self).toOpaque()
                 )
-                AudioUnitSetProperty(ou, kAudioUnitProperty_SetRenderCallback,
+                s = AudioUnitSetProperty(ou, kAudioUnitProperty_SetRenderCallback,
                                      kAudioUnitScope_Input, 0, &renderCallback,
                                      UInt32(MemoryLayout<AURenderCallbackStruct>.size))
-                AudioUnitInitialize(ou)
-                AudioOutputUnitStart(ou)
+                if s != noErr { print("Warning: output render callback failed: \(s)") }
+
+                s = AudioUnitInitialize(ou)
+                if s != noErr { print("Warning: output init failed: \(s)") }
+
+                s = AudioOutputUnitStart(ou)
+                if s != noErr { print("Warning: output start failed: \(s)") }
             }
         }
 
@@ -438,12 +457,19 @@ class MicProxy {
     private var speakerWritePos: UInt64 = 0
     private var speakerReadPos: UInt64 = 0
 
+    private var speakerEnqueueTotal: UInt64 = 0
+
     fileprivate func enqueueSpeakerSamples(_ samples: UnsafePointer<Float>, count: Int) {
         let cap = speakerBufCapacity
         for i in 0..<count {
             let idx = Int(speakerWritePos % UInt64(cap))
             speakerRing[idx] = samples[i]
             speakerWritePos += 1
+        }
+        speakerEnqueueTotal += UInt64(count)
+        if speakerEnqueueTotal % 48000 < UInt64(count) {
+            print("Speaker enqueue: \(speakerEnqueueTotal) samples total, avail=\(Int(speakerWritePos - speakerReadPos))")
+            fflush(stdout)
         }
     }
 
@@ -552,11 +578,13 @@ func printUsage() {
     VirtualMicApp — proxy a real mic through the VirtualMic driver
 
     Usage:
+      VirtualMicApp start [--port 9999]    Start web UI + server (Ctrl-C to stop)
       VirtualMicApp list                   List available input devices
-      VirtualMicApp start <device-name>    Start proxying a real mic (Ctrl-C to stop)
       VirtualMicApp inject <audiofile>     Inject audio into running proxy
       VirtualMicApp stop                   Clear ring buffers
       VirtualMicApp status                 Show buffer fill level
+
+    Open http://localhost:9999 to configure the mic proxy and play sounds.
     """)
 }
 
@@ -579,28 +607,41 @@ func main() throws {
         }
 
     case "start":
-        guard args.count >= 3 else { print("Missing device name."); exit(1) }
-        let query = args[2]
-        guard let device = findDevice(matching: query) else {
-            print("No input device matching '\(query)'. Use 'VirtualMicApp list' to see available devices.")
-            exit(1)
+        // Parse --port flag
+        var port: UInt16 = 0
+        var i = 2
+        while i < args.count {
+            if args[i] == "--port", i + 1 < args.count, let p = UInt16(args[i + 1]) {
+                port = p
+                i += 2
+            } else {
+                i += 1
+            }
         }
 
-        print("Proxying: \(device.name) (\(device.inputChannels) ch)")
-        print("Press Ctrl-C to stop.\n")
+        var config = AppConfig.load()
+        if port > 0 { config.port = port }
 
         let mainRing   = try SharedRingBuffer(name: SHM_NAME)
         let injectRing = try SharedRingBuffer(name: SHM_INJECT_NAME)
 
-        let proxy = MicProxy(deviceID: device.id, mainRing: mainRing, injectRing: injectRing)
-        try proxy.start()
+        let server = HTTPServer(port: config.port, config: config, mainRing: mainRing, injectRing: injectRing)
+        try server.start()
 
-        // Keep alive until Ctrl-C
+        // Auto-start proxy if a device was previously saved
+        if let savedDevice = config.selectedDevice, let device = findDevice(matching: savedDevice) {
+            let proxy = MicProxy(deviceID: device.id, mainRing: mainRing, injectRing: injectRing)
+            try proxy.start()
+            server.proxy = proxy
+            server.proxyDeviceName = device.name
+            print("Auto-started proxy: \(device.name)")
+        }
+
         signal(SIGINT) { _ in
-            print("\nStopping proxy.")
+            print("\nStopping.")
             exit(0)
         }
-        print("Proxy running. Select 'VirtualMic' as your mic input in any app.")
+        print("Press Ctrl-C to stop.")
         dispatchMain()
 
     case "inject":
