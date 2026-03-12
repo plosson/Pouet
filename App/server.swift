@@ -44,12 +44,24 @@ class HTTPServer {
 
     private var listenSocket: Int32 = -1
     private let queue = DispatchQueue(label: "httpserver", attributes: .concurrent)
+    private var cachedDevices: [[String: Any]] = []
+    private var deviceCacheLoading = false
 
     init(port: UInt16, config: AppConfig, mainRing: SharedRingBuffer, injectRing: SharedRingBuffer) {
         self.port = port
         self.config = config
         self.mainRing = mainRing
         self.injectRing = injectRing
+    }
+
+    func refreshDeviceCache() {
+        print("[server] Refreshing device cache...")
+        fflush(stdout)
+        cachedDevices = listInputDevices().map { dev in
+            ["id": dev.id, "name": dev.name, "uid": dev.uid, "channels": dev.inputChannels] as [String: Any]
+        }
+        print("[server] Cached \(cachedDevices.count) devices")
+        fflush(stdout)
     }
 
     func start() throws {
@@ -78,6 +90,11 @@ class HTTPServer {
 
         print("Web UI: http://localhost:\(port)")
         fflush(stdout)
+
+        // Cache device list in background (coreaudiod may still be restarting)
+        DispatchQueue.global().async { [weak self] in
+            self?.refreshDeviceCache()
+        }
 
         // Accept loop on background thread
         let sock = listenSocket
@@ -120,6 +137,10 @@ class HTTPServer {
             }
         }
 
+        if path != "/api/status" {  // don't spam status polls
+            print("[server] \(method) \(path)")
+            fflush(stdout)
+        }
         let response = routeRequest(method: method, path: path, query: queryParams, body: body)
         sendResponse(fd: fd, response: response)
     }
@@ -227,10 +248,14 @@ class HTTPServer {
     // ---------------------------------------------------------------------------
 
     private func handleGetDevices() -> HTTPResponse {
-        let devices = listInputDevices().map { dev in
-            ["id": dev.id, "name": dev.name, "uid": dev.uid, "channels": dev.inputChannels] as [String: Any]
+        if cachedDevices.isEmpty && !deviceCacheLoading {
+            deviceCacheLoading = true
+            DispatchQueue.global().async { [weak self] in
+                self?.refreshDeviceCache()
+                self?.deviceCacheLoading = false
+            }
         }
-        return .json(["devices": devices])
+        return .json(["devices": cachedDevices])
     }
 
     private func handleGetSounds() -> HTTPResponse {
@@ -288,7 +313,12 @@ class HTTPServer {
     }
 
     private func handleProxyStart(body: String?) -> HTTPResponse {
+        print("[proxy] Start requested")
+        fflush(stdout)
+
         if proxy != nil {
+            print("[proxy] Already running")
+            fflush(stdout)
             return .json(["error": "Proxy already running"], status: 400)
         }
 
@@ -299,12 +329,28 @@ class HTTPServer {
         }
 
         guard let query = deviceQuery, !query.isEmpty else {
+            print("[proxy] Missing device field")
+            fflush(stdout)
             return .json(["error": "Missing 'device' field"], status: 400)
         }
 
-        guard let device = findDevice(matching: query) else {
+        print("[proxy] Looking for device: '\(query)' in \(cachedDevices.count) cached devices")
+        fflush(stdout)
+
+        // Use cached devices to find the device ID (avoid CoreAudio calls on GCD thread)
+        let lowerQuery = query.lowercased()
+        guard let cached = cachedDevices.first(where: { ($0["name"] as? String)?.lowercased() == lowerQuery })
+                        ?? cachedDevices.first(where: { ($0["name"] as? String)?.lowercased().contains(lowerQuery) == true }),
+              let devID = cached["id"] as? UInt32,
+              let devName = cached["name"] as? String else {
+            print("[proxy] Device not found in cache")
+            fflush(stdout)
             return .json(["error": "No input device matching '\(query)'"], status: 400)
         }
+
+        let device = (id: devID, name: devName)
+        print("[proxy] Found device: \(device.name) (id=\(device.id))")
+        fflush(stdout)
 
         let newProxy = MicProxy(deviceID: device.id, mainRing: mainRing, injectRing: injectRing)
         do {
@@ -313,13 +359,19 @@ class HTTPServer {
             proxyDeviceName = device.name
             config.selectedDevice = device.name
             config.save()
+            print("[proxy] Started successfully: \(device.name)")
+            fflush(stdout)
             return .json(["ok": true, "device": device.name])
         } catch {
+            print("[proxy] Start failed: \(error)")
+            fflush(stdout)
             return .json(["error": error.localizedDescription], status: 500)
         }
     }
 
     private func handleProxyStop() -> HTTPResponse {
+        print("[proxy] Stop requested")
+        fflush(stdout)
         guard let p = proxy else {
             return .json(["error": "Proxy not running"], status: 400)
         }
@@ -328,6 +380,11 @@ class HTTPServer {
         proxyDeviceName = nil
         mainRing.clear()
         injectRing.clear()
+        print("[proxy] Stopped, refreshing device cache...")
+        fflush(stdout)
+        refreshDeviceCache()
+        print("[proxy] Device cache refreshed")
+        fflush(stdout)
         return .json(["ok": true])
     }
 

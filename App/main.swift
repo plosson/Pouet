@@ -103,6 +103,23 @@ class SharedRingBuffer {
         }
     }
 
+    /// Non-blocking write: drops samples if buffer is full. Safe for real-time audio threads.
+    func tryWrite(_ samples: UnsafePointer<Float>, count: Int) -> Int {
+        let cap = capacity
+        let wp = header.pointee.writePos
+        let rp = header.pointee.readPos
+        let avail = cap - Int(wp - rp)
+        if avail <= 0 { return 0 }
+
+        let chunk = min(avail, count)
+        for i in 0..<chunk {
+            let idx = Int((wp + UInt64(i)) % UInt64(cap))
+            data[idx] = samples[i]
+        }
+        header.pointee.writePos = wp + UInt64(chunk)
+        return chunk
+    }
+
     func writeArray(_ samples: [Float]) {
         samples.withUnsafeBufferPointer { buf in
             write(buf.baseAddress!, count: buf.count)
@@ -314,9 +331,14 @@ class MicProxy {
         self.mainRing = mainRing
         self.injectRing = injectRing
         self.injectBuf = [Float](repeating: 0, count: mixBufSize)
+        self.speakerRing = UnsafeMutablePointer<Float>.allocate(capacity: speakerBufCapacity)
+        self.speakerRing.initialize(repeating: 0, count: speakerBufCapacity)
     }
 
     func start() throws {
+        print("[mic] Starting proxy for device \(deviceID)")
+        fflush(stdout)
+
         // --- Input unit (capture from real mic) ---
         var inputDesc = AudioComponentDescription(
             componentType: kAudioUnitType_Output,
@@ -437,23 +459,28 @@ class MicProxy {
         // Start capturing
         status = AudioOutputUnitStart(unit)
         guard status == noErr else { throw NSError(domain: "StartUnit", code: Int(status)) }
+        print("[mic] Input unit started, capturing from device \(deviceID)")
+        fflush(stdout)
     }
 
     func stop() {
         if let unit = audioUnit {
             AudioOutputUnitStop(unit)
             AudioComponentInstanceDispose(unit)
+            audioUnit = nil
         }
         if let unit = outputUnit {
             AudioOutputUnitStop(unit)
             AudioComponentInstanceDispose(unit)
+            outputUnit = nil
         }
+        speakerRing.deallocate()
     }
 
     // Buffer for inject audio to play to speakers
-    // We use a separate ring buffer to decouple inject reading for mix vs playback
+    // Uses raw memory — safe for concurrent access from audio threads
     private let speakerBufCapacity = 48000 * 2 * 2  // 2 seconds stereo
-    private lazy var speakerRing: [Float] = [Float](repeating: 0, count: speakerBufCapacity)
+    private let speakerRing: UnsafeMutablePointer<Float>
     private var speakerWritePos: UInt64 = 0
     private var speakerReadPos: UInt64 = 0
 
@@ -543,7 +570,8 @@ private func inputCallback(
     }
 
     // Write mixed audio to main ring buffer (driver reads this)
-    proxy.mainRing.write(captureBuffer, count: numSamples)
+    // Use non-blocking write — never block the audio thread
+    _ = proxy.mainRing.tryWrite(captureBuffer, count: numSamples)
 
     return noErr
 }
