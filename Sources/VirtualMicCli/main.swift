@@ -12,6 +12,7 @@ import Foundation
 import AVFoundation
 import CoreAudio
 import AudioToolbox
+import CSHMBridge
 
 // ---------------------------------------------------------------------------
 // MARK: - Shared memory constants
@@ -671,7 +672,7 @@ func main() throws {
         mainRing.clear()
         injectRing.clear()
 
-        let server = HTTPServer(port: config.port, config: config, mainRing: mainRing, injectRing: injectRing)
+        let server = VirtualMicServer(port: config.port, config: config, mainRing: mainRing, injectRing: injectRing)
         try server.start()
 
         // Auto-start proxy if a device was previously saved

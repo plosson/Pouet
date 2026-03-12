@@ -73,6 +73,15 @@ struct ContentView: View {
                 .padding(.vertical, 6)
             }
         }
+        .onAppear {
+            server.checkIfRunning()
+        }
+        .onChange(of: server.isRunning) { running in
+            if running {
+                startPolling()
+                loadData()
+            }
+        }
     }
 
     // MARK: - Server bar
@@ -93,11 +102,6 @@ struct ContentView: View {
             } else {
                 Button("Start Server") {
                     server.start()
-                    // Wait a moment for server to start, then begin polling
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        startPolling()
-                        loadData()
-                    }
                 }
                 .buttonStyle(.borderedProminent)
             }

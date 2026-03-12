@@ -6,7 +6,7 @@ line — it appears as a real mic input to every app on your Mac.
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  VirtualMicApp (your process)                        │
+│  VirtualMicCli (your process)                        │
 │  • Decodes MP3/AAC/WAV via AVFoundation              │
 │  • Resamples to 48 kHz stereo Float32                │
 │  • Writes into shared memory ring buffer ──────────► │──┐
@@ -68,16 +68,16 @@ If macOS shows "not from identified developer", go to:
 
 ```bash
 # Inject an MP3 (plays once then drains)
-VirtualMicApp inject ~/Music/track.mp3
+VirtualMicCli inject ~/Music/track.mp3
 
 # Loop audio continuously (Ctrl-C to stop)
-VirtualMicApp stream ~/Music/background.mp3
+VirtualMicCli stream ~/Music/background.mp3
 
 # Stop / clear buffer
-VirtualMicApp stop
+VirtualMicCli stop
 
 # Check how full the ring buffer is
-VirtualMicApp status
+VirtualMicCli status
 ```
 
 Then select **VirtualMic** as your microphone input in any app.
@@ -141,7 +141,7 @@ available samples. No mutex is needed — one producer, one consumer, atomic ops
 make uninstall
 # or manually:
 sudo rm -rf /Library/Audio/Plug-Ins/HAL/VirtualMic.driver
-sudo rm -f  /usr/local/bin/VirtualMicApp
+sudo rm -f  /usr/local/bin/VirtualMicCli
 sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod
 ```
 

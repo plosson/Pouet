@@ -9,24 +9,18 @@ class ServerManager: ObservableObject {
     private var outputPipe: Pipe?
 
     var cliPath: String {
-        // Check common locations
         let paths = [
-            "/usr/local/bin/VirtualMicApp",
-            Bundle.main.bundlePath + "/Contents/Resources/VirtualMicApp"
+            "/usr/local/bin/VirtualMicCli",
+            Bundle.main.bundlePath + "/Contents/Resources/VirtualMicCli"
         ]
-        return paths.first { FileManager.default.fileExists(atPath: $0) } ?? "/usr/local/bin/VirtualMicApp"
+        return paths.first { FileManager.default.fileExists(atPath: $0) } ?? "/usr/local/bin/VirtualMicCli"
     }
 
     func start(port: UInt16 = 9999) {
         guard !isRunning else { return }
 
-        // Kill any existing VirtualMicApp process to free the port
-        let killProc = Process()
-        killProc.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-        killProc.arguments = ["VirtualMicApp"]
-        try? killProc.run()
-        killProc.waitUntilExit()
-        // Give it a moment to release the port
+        // Kill any existing VirtualMicCli process to free the port
+        killExisting()
         Thread.sleep(forTimeInterval: 0.5)
 
         let path = cliPath
@@ -43,13 +37,11 @@ class ServerManager: ObservableObject {
         proc.standardError = pipe
         outputPipe = pipe
 
-        // Read output asynchronously
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty, let str = String(data: data, encoding: .utf8) else { return }
             DispatchQueue.main.async {
                 self?.serverOutput += str
-                // Keep last 2000 chars
                 if let s = self?.serverOutput, s.count > 2000 {
                     self?.serverOutput = String(s.suffix(2000))
                 }
@@ -76,13 +68,34 @@ class ServerManager: ObservableObject {
     }
 
     func stop() {
-        guard let proc = process, proc.isRunning else {
-            isRunning = false
-            return
+        if let proc = process, proc.isRunning {
+            proc.interrupt()
+        } else {
+            // Server was started externally — kill by name
+            killExisting()
         }
-        proc.interrupt()  // SIGINT, same as Ctrl-C
         process = nil
         isRunning = false
+    }
+
+    func checkIfRunning(port: UInt16 = 9999) {
+        let url = URL(string: "http://localhost:\(port)/api/status")!
+        URLSession.shared.dataTask(with: url) { data, response, error in
+            guard error == nil,
+                  let http = response as? HTTPURLResponse,
+                  http.statusCode == 200 else { return }
+            DispatchQueue.main.async {
+                self.isRunning = true
+            }
+        }.resume()
+    }
+
+    private func killExisting() {
+        let kill = Process()
+        kill.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+        kill.arguments = ["VirtualMicCli"]
+        try? kill.run()
+        kill.waitUntilExit()
     }
 
     deinit {
