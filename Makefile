@@ -26,6 +26,11 @@ DRIVER_PLIST  = Driver/VirtualMic.driver/Contents/Info.plist
 APP_SRC       = App/main.swift App/server.swift
 APP_BINARY    = build/VirtualMicApp
 
+GUI_SRC       = MacApp/VirtualMicGUI.swift MacApp/ServerManager.swift MacApp/APIClient.swift MacApp/ContentView.swift
+GUI_BUNDLE    = build/VirtualMic.app
+GUI_BINARY    = $(GUI_BUNDLE)/Contents/MacOS/VirtualMic
+GUI_BUNDLE_ID = com.virtualmicdrv.gui
+
 PKG_ROOT      = build/pkg_root
 PKG_OUT       = build/VirtualMic-$(VERSION).pkg
 
@@ -50,9 +55,9 @@ SWIFTFLAGS    = -target arm64-apple-macos12.0 \
                 -O
 
 # ============================================================
-.PHONY: all driver app sign pkg install uninstall clean
+.PHONY: all driver app gui sign pkg install uninstall clean
 
-all: driver app
+all: driver app gui
 
 # ---- Driver bundle ----
 driver: $(DRIVER_BINARY)
@@ -86,6 +91,22 @@ $(APP_BINARY): $(APP_SRC)
 	codesign --force --sign - --entitlements App/entitlements.plist $(APP_BINARY)
 	@echo "✓ App binary built → $(APP_BINARY)"
 
+# ---- GUI app ----
+gui: $(GUI_BINARY)
+
+$(GUI_BINARY): $(GUI_SRC) $(APP_BINARY)
+	@mkdir -p $(GUI_BUNDLE)/Contents/MacOS
+	@mkdir -p $(GUI_BUNDLE)/Contents/Resources
+	$(SWIFTC) -target arm64-apple-macos13.0 \
+	    -sdk $(shell xcrun --show-sdk-path) \
+	    -O -parse-as-library \
+	    -o $(GUI_BINARY) \
+	    $(GUI_SRC)
+	@cp MacApp/Info.plist $(GUI_BUNDLE)/Contents/Info.plist
+	@cp $(APP_BINARY) $(GUI_BUNDLE)/Contents/Resources/VirtualMicApp
+	codesign --force --sign - --entitlements App/entitlements.plist $(GUI_BUNDLE)
+	@echo "✓ GUI app built → $(GUI_BUNDLE)"
+
 # ---- Code signing ----
 sign: all
 	codesign --force --options runtime \
@@ -97,6 +118,11 @@ sign: all
 	    --identifier $(APP_BUNDLE_ID) \
 	    --entitlements App/entitlements.plist \
 	    $(APP_BINARY)
+	codesign --force --options runtime \
+	    --sign "$(DEVID)" \
+	    --identifier $(GUI_BUNDLE_ID) \
+	    --entitlements App/entitlements.plist \
+	    $(GUI_BUNDLE)
 	@echo "✓ Signed"
 
 # ---- Notarize (fill in your Apple ID + app-specific password) ----
@@ -116,8 +142,10 @@ pkg: sign
 	@rm -rf $(PKG_ROOT)
 	@mkdir -p $(PKG_ROOT)$(HAL_DIR)
 	@mkdir -p $(PKG_ROOT)/usr/local/bin
+	@mkdir -p $(PKG_ROOT)/Applications
 	@cp -R $(DRIVER_BUNDLE) $(PKG_ROOT)$(HAL_DIR)/
 	@cp    $(APP_BINARY)    $(PKG_ROOT)/usr/local/bin/VirtualMicApp
+	@cp -R $(GUI_BUNDLE)    $(PKG_ROOT)/Applications/
 	pkgbuild \
 	    --root $(PKG_ROOT) \
 	    --identifier $(BUNDLE_ID) \
