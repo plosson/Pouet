@@ -26,7 +26,7 @@ DRIVER_PLIST  = Driver/VirtualMic.driver/Contents/Info.plist
 APP_SPM_SRC   = Sources/VirtualMicCli/main.swift Sources/VirtualMicCli/server.swift
 APP_BINARY    = build/VirtualMicCli
 
-GUI_SRC       = MacApp/VirtualMicGUI.swift MacApp/ServerManager.swift MacApp/APIClient.swift MacApp/ContentView.swift
+GUI_SRC       = MacApp/VirtualMicGUI.swift MacApp/AppService.swift MacApp/AudioService.swift MacApp/ContentView.swift
 GUI_BUNDLE    = build/VirtualMic.app
 GUI_BINARY    = $(GUI_BUNDLE)/Contents/MacOS/VirtualMic
 GUI_BUNDLE_ID = com.virtualmicdrv.gui
@@ -95,6 +95,10 @@ $(GUI_BINARY): $(GUI_SRC) $(APP_BINARY)
 	$(SWIFTC) -target arm64-apple-macos13.0 \
 	    -sdk $(shell xcrun --show-sdk-path) \
 	    -O -parse-as-library \
+	    -import-objc-header MacApp/BridgingHeader.h \
+	    -framework CoreAudio \
+	    -framework AVFoundation \
+	    -framework AudioToolbox \
 	    -o $(GUI_BINARY) \
 	    $(GUI_SRC)
 	@cp MacApp/Info.plist $(GUI_BUNDLE)/Contents/Info.plist

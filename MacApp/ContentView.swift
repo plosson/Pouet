@@ -16,29 +16,12 @@ private enum Theme {
 // MARK: - Main View
 
 struct ContentView: View {
-    @ObservedObject var server: ServerManager
-    @StateObject private var api = APIClient()
+    @ObservedObject var app: AppService
 
-    @State private var devices: [APIClient.Device] = []
-    @State private var selectedDevice = ""
-    @State private var proxyRunning = false
-    @State private var proxyDevice: String?
-    @State private var sounds: [String] = []
-    @State private var volume: Float = 1.0
-    @State private var mainRingPercent = 0
-    @State private var injectRingPercent = 0
     @State private var toast: String?
-    @State private var pollTimer: Timer?
     @State private var selectedTab = 0
-    @State private var soundsDir = ""
     @State private var showUninstallConfirm = false
-    @State private var currentlyPlaying: String?
     @State private var showLog = false
-
-    init(server: ServerManager) {
-        self._server = ObservedObject(wrappedValue: server)
-        server.checkIfRunning()
-    }
 
     var body: some View {
         ZStack {
@@ -48,37 +31,17 @@ struct ContentView: View {
                 headerBar
                 Divider().background(Theme.cardBorder)
 
-                if server.isRunning {
-                    tabBar
-                    ScrollView {
-                        Group {
-                            switch selectedTab {
-                            case 0: dashboardTab
-                            case 1: soundBoardTab
-                            case 2: settingsTab
-                            default: dashboardTab
-                            }
+                tabBar
+                ScrollView {
+                    Group {
+                        switch selectedTab {
+                        case 0: dashboardTab
+                        case 1: soundBoardTab
+                        case 2: settingsTab
+                        default: dashboardTab
                         }
-                        .padding(20)
                     }
-                } else {
-                    Spacer()
-                    offlineView
-                    Spacer()
-                }
-
-                // Collapsible log
-                if showLog && !server.serverOutput.isEmpty {
-                    Divider().background(Theme.cardBorder)
-                    ScrollView {
-                        Text(server.serverOutput)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(Theme.dimText)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(8)
-                    }
-                    .frame(maxHeight: 70)
-                    .background(Color.black.opacity(0.3))
+                    .padding(20)
                 }
 
                 // Toast
@@ -102,16 +65,6 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .onAppear { server.checkIfRunning() }
-        .onChange(of: server.isRunning) { running in
-            if running {
-                startPolling()
-                loadData()
-            } else {
-                pollTimer?.invalidate()
-                pollTimer = nil
-            }
-        }
         .alert("Uninstall VirtualMic", isPresented: $showUninstallConfirm) {
             Button("Cancel", role: .cancel) {}
             Button("Uninstall", role: .destructive) { performUninstall() }
@@ -124,26 +77,25 @@ struct ContentView: View {
 
     private var headerBar: some View {
         HStack(spacing: 12) {
-            // Animated status dot
             ZStack {
-                if server.isRunning && proxyRunning {
+                if app.proxyRunning {
                     Circle()
                         .fill(Theme.accent.opacity(0.3))
                         .frame(width: 20, height: 20)
-                        .scaleEffect(pulseScale)
-                        .animation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true), value: proxyRunning)
+                        .scaleEffect(1.4)
+                        .animation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true), value: app.proxyRunning)
                 }
                 Circle()
-                    .fill(server.isRunning ? (proxyRunning ? Theme.accent : Color.orange) : Color(white: 0.3))
+                    .fill(app.proxyRunning ? Theme.accent : Color.orange)
                     .frame(width: 10, height: 10)
             }
             .frame(width: 20, height: 20)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(server.isRunning ? (proxyRunning ? "Proxying" : "Server Ready") : "Offline")
+                Text(app.proxyRunning ? "Proxying" : "Ready")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(Theme.bodyText)
-                if server.isRunning, let dev = proxyDevice, proxyRunning {
+                if let dev = app.proxyDeviceName, app.proxyRunning {
                     Text(dev)
                         .font(.system(size: 10))
                         .foregroundColor(Theme.dimText)
@@ -151,43 +103,10 @@ struct ContentView: View {
             }
 
             Spacer()
-
-            // Log toggle
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { showLog.toggle() }
-            } label: {
-                Image(systemName: "terminal")
-                    .font(.system(size: 12))
-                    .foregroundColor(showLog ? Theme.accent : Theme.dimText)
-            }
-            .buttonStyle(.plain)
-            .help("Toggle server log")
-
-            // Power button
-            Button {
-                if server.isRunning {
-                    stopEverything()
-                } else {
-                    server.start()
-                }
-            } label: {
-                Image(systemName: "power")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(server.isRunning ? Theme.accent : Theme.dimText)
-                    .frame(width: 30, height: 30)
-                    .background(
-                        Circle()
-                            .fill(server.isRunning ? Theme.accent.opacity(0.15) : Color.white.opacity(0.05))
-                    )
-            }
-            .buttonStyle(.plain)
-            .help(server.isRunning ? "Stop server" : "Start server")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
     }
-
-    private var pulseScale: CGFloat { proxyRunning ? 1.4 : 1.0 }
 
     // MARK: - Tab Bar
 
@@ -223,43 +142,6 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Offline View
-
-    private var offlineView: some View {
-        VStack(spacing: 16) {
-            ZStack {
-                Circle()
-                    .fill(Theme.cardBg)
-                    .frame(width: 80, height: 80)
-                Image(systemName: "mic.slash")
-                    .font(.system(size: 32, weight: .light))
-                    .foregroundColor(Theme.dimText)
-            }
-            Text("VirtualMic is offline")
-                .font(.system(size: 18, weight: .medium))
-                .foregroundColor(Theme.bodyText)
-            Text("Start the server to begin")
-                .font(.system(size: 13))
-                .foregroundColor(Theme.dimText)
-            Button {
-                server.start()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "power")
-                    Text("Start Server")
-                }
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(Theme.bg)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 10)
-                .background(Theme.accent)
-                .cornerRadius(10)
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 4)
-        }
-    }
-
     // MARK: - Dashboard Tab
 
     private var dashboardTab: some View {
@@ -270,13 +152,12 @@ struct ContentView: View {
                     cardTitle("Microphone Proxy", icon: "mic.fill")
 
                     HStack(spacing: 10) {
-                        // Device picker
                         Menu {
-                            Button("-- Select microphone --") { selectedDevice = "" }
+                            Button("-- Select microphone --") { app.selectedDevice = "" }
                             Divider()
-                            ForEach(devices) { dev in
-                                Button("\(dev.name) (\(dev.channels) ch)") {
-                                    selectedDevice = dev.name
+                            ForEach(app.devices) { dev in
+                                Button("\(dev.name) (\(dev.inputChannels) ch)") {
+                                    app.selectedDevice = dev.name
                                 }
                             }
                         } label: {
@@ -284,9 +165,9 @@ struct ContentView: View {
                                 Image(systemName: "waveform")
                                     .font(.system(size: 11))
                                     .foregroundColor(Theme.purple)
-                                Text(selectedDevice.isEmpty ? "Select microphone" : selectedDevice)
+                                Text(app.selectedDevice.isEmpty ? "Select microphone" : app.selectedDevice)
                                     .font(.system(size: 12))
-                                    .foregroundColor(selectedDevice.isEmpty ? Theme.dimText : Theme.bodyText)
+                                    .foregroundColor(app.selectedDevice.isEmpty ? Theme.dimText : Theme.bodyText)
                                     .lineLimit(1)
                                 Spacer()
                                 Image(systemName: "chevron.up.chevron.down")
@@ -299,12 +180,12 @@ struct ContentView: View {
                             .cornerRadius(8)
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.cardBorder, lineWidth: 1))
                         }
-                        .disabled(proxyRunning)
+                        .disabled(app.proxyRunning)
 
-                        // Start/Stop button
-                        if proxyRunning {
+                        if app.proxyRunning {
                             Button {
-                                Task { await doStopProxy() }
+                                app.stopProxy()
+                                showToast("Proxy stopped")
                             } label: {
                                 Image(systemName: "stop.fill")
                                     .font(.system(size: 11))
@@ -316,17 +197,22 @@ struct ContentView: View {
                             .buttonStyle(.plain)
                         } else {
                             Button {
-                                Task { await doStartProxy() }
+                                do {
+                                    try app.startProxy(deviceName: app.selectedDevice)
+                                    showToast("Proxy started")
+                                } catch {
+                                    showToast("Error: \(error.localizedDescription)")
+                                }
                             } label: {
                                 Image(systemName: "play.fill")
                                     .font(.system(size: 11))
-                                    .foregroundColor(selectedDevice.isEmpty ? Theme.dimText : Theme.bg)
+                                    .foregroundColor(app.selectedDevice.isEmpty ? Theme.dimText : Theme.bg)
                                     .frame(width: 34, height: 34)
-                                    .background(selectedDevice.isEmpty ? Color.white.opacity(0.05) : Theme.accent)
+                                    .background(app.selectedDevice.isEmpty ? Color.white.opacity(0.05) : Theme.accent)
                                     .cornerRadius(8)
                             }
                             .buttonStyle(.plain)
-                            .disabled(selectedDevice.isEmpty)
+                            .disabled(app.selectedDevice.isEmpty)
                         }
                     }
                 }
@@ -337,17 +223,15 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     cardTitle("Inject Volume", icon: "speaker.wave.2.fill")
                     HStack(spacing: 10) {
-                        Image(systemName: volume < 0.01 ? "speaker.slash.fill" : "speaker.fill")
+                        Image(systemName: app.volume < 0.01 ? "speaker.slash.fill" : "speaker.fill")
                             .font(.system(size: 11))
                             .foregroundColor(Theme.dimText)
                             .frame(width: 16)
-                        Slider(value: $volume, in: 0...1, step: 0.01) { editing in
-                            if !editing {
-                                Task { try? await api.setVolume(volume) }
-                            }
+                        Slider(value: $app.volume, in: 0...1, step: 0.01) { editing in
+                            if !editing { app.setVolume(app.volume) }
                         }
                         .tint(Theme.accent)
-                        Text("\(Int(volume * 100))%")
+                        Text("\(Int(app.volume * 100))%")
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundColor(Theme.bodyText)
                             .frame(width: 36, alignment: .trailing)
@@ -359,8 +243,8 @@ struct ContentView: View {
             card {
                 VStack(alignment: .leading, spacing: 12) {
                     cardTitle("Audio Pipeline", icon: "waveform.path")
-                    meterRow(label: "Mic -> Apps", percent: mainRingPercent, color: Theme.purple)
-                    meterRow(label: "Inject Buffer", percent: injectRingPercent, color: Theme.accent)
+                    meterRow(label: "Mic -> Apps", percent: app.mainRingPercent, color: Theme.purple)
+                    meterRow(label: "Inject Buffer", percent: app.injectRingPercent, color: Theme.accent)
                 }
             }
         }
@@ -370,13 +254,10 @@ struct ContentView: View {
 
     private var soundBoardTab: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Toolbar: refresh + stop all
             HStack(spacing: 8) {
                 Button {
-                    Task {
-                        sounds = (try? await api.getSounds()) ?? sounds
-                        showToast("Sounds refreshed")
-                    }
+                    app.refreshSounds()
+                    showToast("Sounds refreshed")
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.clockwise")
@@ -391,9 +272,10 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
 
-                if currentlyPlaying != nil {
+                if app.currentlyPlaying != nil {
                     Button {
-                        Task { await doStopPlayback() }
+                        app.stopPlayback()
+                        showToast("Stopped")
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "stop.fill")
@@ -412,8 +294,8 @@ struct ContentView: View {
                 Spacer()
 
                 Button {
-                    if !soundsDir.isEmpty {
-                        NSWorkspace.shared.open(URL(fileURLWithPath: soundsDir))
+                    if !app.soundsDir.isEmpty {
+                        NSWorkspace.shared.open(URL(fileURLWithPath: app.soundsDir))
                     }
                 } label: {
                     HStack(spacing: 4) {
@@ -426,7 +308,7 @@ struct ContentView: View {
                 .buttonStyle(.plain)
             }
 
-            if sounds.isEmpty {
+            if app.sounds.isEmpty {
                 VStack(spacing: 16) {
                     Spacer()
                     ZStack {
@@ -451,7 +333,7 @@ struct ContentView: View {
                     GridItem(.flexible(), spacing: 10),
                     GridItem(.flexible(), spacing: 10)
                 ], spacing: 10) {
-                    ForEach(sounds, id: \.self) { name in
+                    ForEach(app.sounds, id: \.self) { name in
                         soundCard(name: name)
                     }
                 }
@@ -460,15 +342,16 @@ struct ContentView: View {
     }
 
     private func soundCard(name: String) -> some View {
-        let isPlaying = currentlyPlaying == name
+        let isPlaying = app.currentlyPlaying == name
         let ext = (name as NSString).pathExtension.uppercased()
         let displayName = (name as NSString).deletingPathExtension
 
         return Button {
             if isPlaying {
-                Task { await doStopPlayback() }
+                app.stopPlayback()
             } else {
-                Task { await doPlay(file: name) }
+                app.playSound(name: name)
+                showToast("Playing: \(displayName)")
             }
         } label: {
             HStack(spacing: 10) {
@@ -514,12 +397,11 @@ struct ContentView: View {
 
     private var settingsTab: some View {
         VStack(spacing: 16) {
-            // Sounds directory
             card {
                 VStack(alignment: .leading, spacing: 12) {
                     cardTitle("Sounds Folder", icon: "folder.fill")
                     HStack(spacing: 8) {
-                        Text(soundsDir.isEmpty ? "~/VirtualMicSounds" : soundsDir)
+                        Text(app.soundsDir.isEmpty ? "~/VirtualMicSounds" : app.soundsDir)
                             .font(.system(size: 12))
                             .foregroundColor(Theme.bodyText)
                             .lineLimit(1)
@@ -531,9 +413,7 @@ struct ContentView: View {
                             .cornerRadius(8)
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.cardBorder, lineWidth: 1))
 
-                        Button {
-                            pickSoundsFolder()
-                        } label: {
+                        Button { pickSoundsFolder() } label: {
                             Text("Browse")
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundColor(Theme.accent)
@@ -545,8 +425,8 @@ struct ContentView: View {
                         .buttonStyle(.plain)
 
                         Button {
-                            if !soundsDir.isEmpty {
-                                NSWorkspace.shared.open(URL(fileURLWithPath: soundsDir))
+                            if !app.soundsDir.isEmpty {
+                                NSWorkspace.shared.open(URL(fileURLWithPath: app.soundsDir))
                             }
                         } label: {
                             Image(systemName: "arrow.up.forward.square")
@@ -562,17 +442,14 @@ struct ContentView: View {
                 }
             }
 
-            // Driver status
             card {
                 VStack(alignment: .leading, spacing: 12) {
                     cardTitle("Audio Driver", icon: "cpu")
-
-                    let driverInstalled = FileManager.default.fileExists(atPath: "/Library/Audio/Plug-Ins/HAL/VirtualMic.driver")
                     HStack(spacing: 8) {
                         Circle()
-                            .fill(driverInstalled ? Theme.accent : Color.red)
+                            .fill(app.driverInstalled ? Theme.accent : Color.red)
                             .frame(width: 8, height: 8)
-                        Text(driverInstalled ? "VirtualMic driver installed" : "Driver not found")
+                        Text(app.driverInstalled ? "VirtualMic driver installed" : "Driver not found")
                             .font(.system(size: 12))
                             .foregroundColor(Theme.bodyText)
                         Spacer()
@@ -580,16 +457,13 @@ struct ContentView: View {
                 }
             }
 
-            // Uninstall
             card {
                 VStack(alignment: .leading, spacing: 12) {
                     cardTitle("Uninstall", icon: "trash")
                     Text("Remove the VirtualMic audio driver, CLI, and restart Core Audio.")
                         .font(.system(size: 12))
                         .foregroundColor(Theme.dimText)
-                    Button {
-                        showUninstallConfirm = true
-                    } label: {
+                    Button { showUninstallConfirm = true } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "trash")
                             Text("Uninstall VirtualMic")
@@ -606,7 +480,6 @@ struct ContentView: View {
                 }
             }
 
-            // About
             card {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -633,14 +506,12 @@ struct ContentView: View {
     // MARK: - Card Components
 
     private func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading) {
-            content()
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.cardBg)
-        .cornerRadius(12)
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.cardBorder, lineWidth: 1))
+        VStack(alignment: .leading) { content() }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.cardBg)
+            .cornerRadius(12)
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.cardBorder, lineWidth: 1))
     }
 
     private func cardTitle(_ title: String, icon: String) -> some View {
@@ -671,13 +542,10 @@ struct ContentView: View {
                     RoundedRectangle(cornerRadius: 3)
                         .fill(Color.white.opacity(0.05))
                     RoundedRectangle(cornerRadius: 3)
-                        .fill(
-                            LinearGradient(
-                                colors: [color.opacity(0.7), color],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
+                        .fill(LinearGradient(
+                            colors: [color.opacity(0.7), color],
+                            startPoint: .leading, endPoint: .trailing
+                        ))
                         .frame(width: geo.size.width * CGFloat(percent) / 100)
                         .animation(.easeOut(duration: 0.3), value: percent)
                 }
@@ -695,58 +563,6 @@ struct ContentView: View {
         }
     }
 
-    private func loadData() {
-        Task {
-            do {
-                devices = try await api.getDevices()
-                sounds = try await api.getSounds()
-                let config = try await api.getConfig()
-                if let dev = config.selectedDevice { selectedDevice = dev }
-                if let dir = config.soundsDir { soundsDir = dir }
-            } catch {}
-        }
-    }
-
-    private func doStartProxy() async {
-        guard !selectedDevice.isEmpty else { return }
-        do {
-            try await api.startProxy(device: selectedDevice)
-            showToast("Proxy started")
-        } catch {
-            showToast("Error: \(error.localizedDescription)")
-        }
-    }
-
-    private func doStopProxy() async {
-        do {
-            try await api.stopProxy()
-            showToast("Proxy stopped")
-        } catch {
-            showToast("Error: \(error.localizedDescription)")
-        }
-    }
-
-    private func doStopPlayback() async {
-        do {
-            try await api.stopPlayback()
-            currentlyPlaying = nil
-            showToast("Stopped")
-        } catch {
-            showToast("Error: \(error.localizedDescription)")
-        }
-    }
-
-    private func doPlay(file: String) async {
-        do {
-            currentlyPlaying = file
-            try await api.play(file: file)
-            showToast("Playing: \((file as NSString).deletingPathExtension)")
-        } catch {
-            currentlyPlaying = nil
-            showToast("Error: \(error.localizedDescription)")
-        }
-    }
-
     private func pickSoundsFolder() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -755,17 +571,13 @@ struct ContentView: View {
         panel.prompt = "Choose"
         panel.message = "Select the folder containing your sound files"
         if panel.runModal() == .OK, let url = panel.url {
-            soundsDir = url.path
-            Task {
-                try? await api.updateConfig(["soundsDir": url.path])
-                sounds = try await api.getSounds()
-                showToast("Sounds folder updated")
-            }
+            app.setSoundsDir(url.path)
+            showToast("Sounds folder updated")
         }
     }
 
     private func performUninstall() {
-        stopEverything()
+        app.shutdown()
         let script = """
         do shell script "rm -rf /Library/Audio/Plug-Ins/HAL/VirtualMic.driver; \
         rm -f /usr/local/bin/VirtualMicCli; \
@@ -775,45 +587,11 @@ struct ContentView: View {
         if let appleScript = NSAppleScript(source: script) {
             appleScript.executeAndReturnError(&error)
             if error == nil {
-                // Move self to trash
                 let appURL = Bundle.main.bundleURL
                 NSWorkspace.shared.recycle([appURL]) { _, _ in
-                    DispatchQueue.main.async {
-                        NSApplication.shared.terminate(nil)
-                    }
+                    DispatchQueue.main.async { NSApplication.shared.terminate(nil) }
                 }
             }
         }
-    }
-
-    private func startPolling() {
-        pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            Task {
-                do {
-                    let status = try await api.getStatus()
-                    await MainActor.run {
-                        proxyRunning = status.proxy.running
-                        proxyDevice = status.proxy.device
-                        volume = status.proxy.injectVolume ?? volume
-                        mainRingPercent = status.mainRing.fillPercent
-                        injectRingPercent = status.injectRing.fillPercent
-                        // Clear playing state when inject buffer drains
-                        if currentlyPlaying != nil && status.injectRing.availableSamples == 0 {
-                            currentlyPlaying = nil
-                        }
-                    }
-                } catch {}
-            }
-        }
-    }
-
-    private func stopEverything() {
-        pollTimer?.invalidate()
-        pollTimer = nil
-        server.stop()
-        proxyRunning = false
-        devices = []
-        sounds = []
     }
 }
