@@ -1,18 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
     <title>VirtualMic Audio Driver</title>
-    <background file="background.png" alignment="bottomleft" scaling="none"/>
     <welcome    file="Welcome.html" mime-type="text/html"/>
     <license    file="License.txt"  mime-type="text/plain"/>
     <conclusion file="Conclusion.html" mime-type="text/html"/>
 
-    <options customize="never" require-scripts="false" hostArchitectures="arm64 x86_64"/>
-
-    <volume-check>
-        <allowed-os-versions>
-            <os-version min="12.0"/>
-        </allowed-os-versions>
-    </volume-check>
+    <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
 
     <choices-outline>
         <line choice="com.virtualmicdrv.driver.choice"/>
@@ -27,5 +20,5 @@
 
     <pkg-ref id="com.virtualmicdrv.driver"
              version="1.0.0"
-             onConclusion="RequireRestart">VirtualMic_component.pkg</pkg-ref>
+             onConclusion="none">VirtualMic_component.pkg</pkg-ref>
 </installer-gui-script>

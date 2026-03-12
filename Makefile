@@ -32,8 +32,8 @@ PKG_OUT       = build/VirtualMic-$(VERSION).pkg
 HAL_DIR       = /Library/Audio/Plug-Ins/HAL
 
 # ---- Signing identities (set via env or override) ----
-DEVID         ?= "Developer ID Application: Your Name (TEAMID)"
-INSTALLER_ID  ?= "Developer ID Installer: Your Name (TEAMID)"
+DEVID         ?= Developer ID Application: SPRL Losson (427N276E3Q)
+INSTALLER_ID  ?= Developer ID Installer: SPRL Losson (427N276E3Q)
 
 # ---- Compiler flags ----
 CC            = clang
@@ -89,12 +89,13 @@ $(APP_BINARY): $(APP_SRC)
 # ---- Code signing ----
 sign: all
 	codesign --force --options runtime \
-	    --sign $(DEVID) \
+	    --sign "$(DEVID)" \
 	    --identifier $(BUNDLE_ID) \
 	    $(DRIVER_BUNDLE)
 	codesign --force --options runtime \
-	    --sign $(DEVID) \
+	    --sign "$(DEVID)" \
 	    --identifier $(APP_BUNDLE_ID) \
+	    --entitlements App/entitlements.plist \
 	    $(APP_BINARY)
 	@echo "✓ Signed"
 
@@ -126,7 +127,7 @@ pkg: sign
 	productbuild \
 	    --distribution Installer/distribution.xml \
 	    --package-path build \
-	    --sign $(INSTALLER_ID) \
+	    --sign "$(INSTALLER_ID)" \
 	    $(PKG_OUT)
 	@echo "✓ Installer → $(PKG_OUT)"
 
@@ -144,8 +145,9 @@ install: driver app
 uninstall:
 	sudo rm -rf $(HAL_DIR)/VirtualMic.driver
 	sudo rm -f  /usr/local/bin/VirtualMicApp
-	sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod
-	@echo "✓ Uninstalled."
+	sudo killall -9 coreaudiod 2>/dev/null || true
+	@sleep 2
+	@echo "✓ Uninstalled. VirtualMic driver removed."
 
 clean:
 	rm -rf build
