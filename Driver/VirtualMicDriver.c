@@ -162,6 +162,7 @@ static void SHM_Open(VirtualMicDriver* d)
 
 // Read `numFrames` stereo frames from ring buffer into `out`.
 // If not enough data: fill silence.
+// If too much data buffered: skip ahead to the freshest samples to minimize latency.
 static void SHM_Read(VirtualMicDriver* d, float* out, uint32_t numFrames)
 {
     uint32_t numSamples = numFrames * VIRTUALMICDRV_NUM_CHANNELS;
@@ -176,6 +177,13 @@ static void SHM_Read(VirtualMicDriver* d, float* out, uint32_t numFrames)
         // Underrun — output silence
         memset(out, 0, numSamples * sizeof(float));
         return;
+    }
+
+    // Skip ahead if too much data buffered (keep only ~2 buffer periods worth)
+    uint64_t maxLag = numSamples * 2;
+    if (avail > maxLag) {
+        rp = wp - maxLag;
+        atomic_store_explicit(&shm->readPos, rp, memory_order_release);
     }
 
     uint32_t cap = shm->capacity;
