@@ -69,7 +69,7 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) {}
             Button("Uninstall", role: .destructive) { performUninstall() }
         } message: {
-            Text("This will remove the VirtualMic audio driver, the CLI tool, and restart Core Audio. The app itself will be moved to Trash.")
+            Text("This will remove the VirtualMic audio driver and restart Core Audio. The app itself will be moved to Trash.")
         }
     }
 
@@ -239,10 +239,19 @@ struct ContentView: View {
                 }
             }
 
-            // Meters
+            // Signal levels
             card {
                 VStack(alignment: .leading, spacing: 12) {
-                    cardTitle("Audio Pipeline", icon: "waveform.path")
+                    cardTitle("Signal Levels", icon: "waveform")
+                    levelMeter(label: "Mic Input", level: app.micPeakLevel, color: Theme.purple)
+                    levelMeter(label: "Inject Audio", level: app.injectPeakLevel, color: Theme.accent)
+                }
+            }
+
+            // Ring buffer stats
+            card {
+                VStack(alignment: .leading, spacing: 12) {
+                    cardTitle("Ring Buffers", icon: "waveform.path")
                     meterRow(label: "Mic -> Apps", percent: app.mainRingPercent, color: Theme.purple)
                     meterRow(label: "Inject Buffer", percent: app.injectRingPercent, color: Theme.accent)
                 }
@@ -443,6 +452,18 @@ struct ContentView: View {
             }
 
             card {
+                VStack(alignment: .leading, spacing: 10) {
+                    cardTitle("Health Check", icon: "checkmark.shield.fill")
+                    healthRow("Driver installed", ok: app.driverInstalled)
+                    healthRow("VirtualMic visible", ok: app.virtualMicVisible)
+                    healthRow("Shared memory", ok: app.shmAvailable)
+                    healthRow("Microphone permission", ok: app.hasMicPermission)
+                    healthRow("Input devices found", ok: !app.devices.isEmpty)
+                    healthRow("Proxy active", ok: app.proxyRunning)
+                }
+            }
+
+            card {
                 VStack(alignment: .leading, spacing: 12) {
                     cardTitle("Audio Driver", icon: "cpu")
                     HStack(spacing: 8) {
@@ -476,7 +497,7 @@ struct ContentView: View {
             card {
                 VStack(alignment: .leading, spacing: 12) {
                     cardTitle("Uninstall", icon: "trash")
-                    Text("Remove the VirtualMic audio driver, CLI, and restart Core Audio.")
+                    Text("Remove the VirtualMic audio driver and restart Core Audio.")
                         .font(.system(size: 12))
                         .foregroundColor(Theme.dimText)
                     Button { showUninstallConfirm = true } label: {
@@ -539,6 +560,50 @@ struct ContentView: View {
                 .font(.system(size: 10, weight: .bold))
                 .foregroundColor(Theme.dimText)
                 .tracking(1)
+        }
+    }
+
+    private func healthRow(_ label: String, ok: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .font(.system(size: 12))
+                .foregroundColor(ok ? Theme.accent : Color.red.opacity(0.8))
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundColor(Theme.bodyText)
+            Spacer()
+        }
+    }
+
+    private func levelMeter(label: String, level: Float, color: Color) -> some View {
+        let dbValue = level > 0.0001 ? 20 * log10(level) : -60.0
+        let normalized = CGFloat(max(0, min(1, (dbValue + 60) / 60)))  // -60dB..0dB → 0..1
+        let dbText = level > 0.0001 ? String(format: "%.0f dB", dbValue) : "-inf"
+
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label)
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.dimText)
+                Spacer()
+                Text(dbText)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(Theme.bodyText)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.white.opacity(0.05))
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(LinearGradient(
+                            colors: [color.opacity(0.7), normalized > 0.85 ? .red : color],
+                            startPoint: .leading, endPoint: .trailing
+                        ))
+                        .frame(width: geo.size.width * normalized)
+                        .animation(.easeOut(duration: 0.08), value: normalized)
+                }
+            }
+            .frame(height: 6)
         }
     }
 
@@ -621,7 +686,6 @@ struct ContentView: View {
         app.shutdown()
         let script = """
         do shell script "rm -rf /Library/Audio/Plug-Ins/HAL/VirtualMic.driver; \
-        rm -f /usr/local/bin/VirtualMicCli; \
         killall -9 coreaudiod 2>/dev/null || true" with administrator privileges
         """
         var error: NSDictionary?

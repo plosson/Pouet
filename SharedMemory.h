@@ -1,6 +1,6 @@
 // SharedMemory.h
 // Shared ring-buffer layout between VirtualMicDriver (coreaudiod side)
-// and the companion VirtualMicCli (user side).
+// and the companion VirtualMic app (user side).
 // Include this header in BOTH targets.
 #pragma once
 #include <stdint.h>

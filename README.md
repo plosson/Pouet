@@ -1,17 +1,18 @@
 # VirtualMic — macOS Virtual Microphone Driver
 
 A minimal, production-ready **Audio Server Plugin** that creates a virtual
-microphone on macOS. Feed it any MP3, AAC, WAV, or FLAC file from the command
-line — it appears as a real mic input to every app on your Mac.
+microphone on macOS. Proxy a real mic through it and inject any MP3, AAC, WAV,
+or FLAC file — it appears as a real mic input to every app on your Mac.
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  VirtualMicCli (your process)                        │
+│  VirtualMic.app (GUI)                                │
+│  • Proxies a real mic through the virtual device     │
 │  • Decodes MP3/AAC/WAV via AVFoundation              │
 │  • Resamples to 48 kHz stereo Float32                │
 │  • Writes into shared memory ring buffer ──────────► │──┐
 └──────────────────────────────────────────────────────┘  │  /VirtualMicAudio
-                                                           │  (POSIX shm)
+                                                          │  (POSIX shm)
 ┌──────────────────────────────────────────────────────┐  │
 │  VirtualMic.driver (inside coreaudiod)               │  │
 │  • Audio Server Plugin (no kext, no SIP changes)     │◄─┘
@@ -27,7 +28,7 @@ line — it appears as a real mic input to every app on your Mac.
 | Component | Language | What it does |
 |-----------|----------|--------------|
 | `VirtualMicDriver.c` | C | Audio Server Plugin — implements the 23-function HAL vtable, reads from shared memory on the real-time audio thread |
-| `App/main.swift` | Swift | CLI — decodes audio files, resamples, writes to shared memory ring buffer |
+| `MacApp/` | Swift | GUI app — mic proxy, soundboard, audio injection, settings |
 | `SharedMemory.h` | C | Shared ring-buffer layout (included by both) |
 | `Installer/` | pkg | One-click `.pkg` installer with postinstall script |
 
@@ -43,7 +44,7 @@ line — it appears as a real mic input to every app on your Mac.
 # Clone / open the project folder
 cd VirtualMicDriver
 
-# Build driver bundle + CLI app (unsigned, for local testing)
+# Build driver bundle + GUI app (unsigned, for local testing)
 make
 
 # Build, sign, and create installer .pkg
@@ -66,21 +67,10 @@ If macOS shows "not from identified developer", go to:
 
 ## Usage
 
-```bash
-# Inject an MP3 (plays once then drains)
-VirtualMicCli inject ~/Music/track.mp3
-
-# Loop audio continuously (Ctrl-C to stop)
-VirtualMicCli stream ~/Music/background.mp3
-
-# Stop / clear buffer
-VirtualMicCli stop
-
-# Check how full the ring buffer is
-VirtualMicCli status
-```
-
-Then select **VirtualMic** as your microphone input in any app.
+1. Open **VirtualMic** from your Applications folder
+2. Select a real microphone to proxy through the virtual device
+3. In any app (Zoom, Discord, FaceTime), select **VirtualMic** as your input
+4. Use the Sounds tab to inject audio through the virtual mic
 
 ## Supported audio formats
 
@@ -104,12 +94,13 @@ before writing to the ring buffer.
 5. `GetZeroTimeStamp` advances the HAL clock by computing elapsed host ticks
    since the anchor, quantised to buffer periods.
 
-### App side (`App/main.swift`)
+### App side (`MacApp/AudioService.swift`)
 
 1. Opens the same shared memory region.
-2. Decodes the audio file with `AVAudioFile` + `AVAudioConverter`
-   (handles any sample rate and channel count → 48 kHz stereo).
-3. Writes interleaved Float32 samples into the ring buffer using atomic
+2. Captures audio from the selected real mic via a HAL AudioUnit.
+3. Mixes in injected audio (decoded with `AVAudioFile` + `AVAudioConverter`,
+   handles any sample rate and channel count → 48 kHz stereo).
+4. Writes interleaved Float32 samples into the ring buffer using atomic
    `writePos` increments. The driver's `readPos` is also visible in shared
    memory so the app can back-pressure if the buffer fills up.
 
@@ -141,7 +132,6 @@ available samples. No mutex is needed — one producer, one consumer, atomic ops
 make uninstall
 # or manually:
 sudo rm -rf /Library/Audio/Plug-Ins/HAL/VirtualMic.driver
-sudo rm -f  /usr/local/bin/VirtualMicCli
 sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod
 ```
 

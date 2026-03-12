@@ -158,6 +158,10 @@ class MicProxy {
     let injectRing: SharedRingBuffer
     var injectVolume: Float = 1.0
 
+    /// Peak levels updated from the audio callback (read from main thread for UI)
+    var micPeakLevel: Float = 0.0
+    var injectPeakLevel: Float = 0.0
+
     var audioUnit: AudioComponentInstance?
     private var outputUnit: AudioComponentInstance?
     private var outputRunning = false
@@ -355,6 +359,14 @@ private func micInputCallback(
     let frames = Int(inNumberFrames)
     for f in 0..<frames { captureBuffer[f * 2 + 1] = captureBuffer[f * 2] }
 
+    // Compute mic peak level
+    var micPeak: Float = 0.0
+    for i in 0..<numSamples {
+        let v = abs(captureBuffer[i])
+        if v > micPeak { micPeak = v }
+    }
+    proxy.micPeakLevel = micPeak
+
     // Read + mix inject audio
     let injectBuffer = UnsafeMutablePointer<Float>.allocate(capacity: numSamples)
     defer { injectBuffer.deallocate() }
@@ -362,12 +374,18 @@ private func micInputCallback(
 
     if injectCount > 0 {
         let vol = proxy.injectVolume
+        var injPeak: Float = 0.0
         for i in 0..<injectCount {
             injectBuffer[i] *= vol
+            let v = abs(injectBuffer[i])
+            if v > injPeak { injPeak = v }
             captureBuffer[i] = min(1.0, max(-1.0, captureBuffer[i] + injectBuffer[i]))
         }
+        proxy.injectPeakLevel = injPeak
         proxy.enqueueSpeakerSamples(injectBuffer, count: injectCount)
         proxy.ensureOutputRunning()
+    } else {
+        proxy.injectPeakLevel = 0.0
     }
 
     _ = proxy.mainRing.tryWrite(captureBuffer, count: numSamples)
@@ -550,6 +568,38 @@ class AudioService {
     var mainRingFillPercent: Int { mainRing?.fillPercent ?? 0 }
     var injectRingFillPercent: Int { injectRing?.fillPercent ?? 0 }
     var injectRingAvailableSamples: Int { injectRing?.availableSamples ?? 0 }
+
+    var micPeakLevel: Float { proxy?.micPeakLevel ?? 0.0 }
+    var injectPeakLevel: Float { proxy?.injectPeakLevel ?? 0.0 }
+
+    /// Check if VirtualMic appears as an audio device in the system
+    var virtualMicVisible: Bool {
+        var propAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize) == noErr else { return false }
+        let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        var ids = [AudioDeviceID](repeating: 0, count: count)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize, &ids) == noErr else { return false }
+        for devID in ids {
+            var uidAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var uidRef: CFString = "" as CFString
+            var uidSize = UInt32(MemoryLayout<CFString>.size)
+            if AudioObjectGetPropertyData(devID, &uidAddr, 0, nil, &uidSize, &uidRef) == noErr {
+                if (uidRef as String).contains("VirtualMic") { return true }
+            }
+        }
+        return false
+    }
 
     // MARK: - Audio Decoding
 

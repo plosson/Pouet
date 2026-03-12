@@ -14,7 +14,6 @@
 #   make clean
 
 BUNDLE_ID     = com.virtualmicdrv.driver
-APP_BUNDLE_ID = com.virtualmicdrv.app
 VERSION       = $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "0.0.0")
 
 # ---- Paths ----
@@ -22,9 +21,6 @@ DRIVER_SRC    = Driver/VirtualMicDriver.c
 DRIVER_BUNDLE = build/VirtualMic.driver
 DRIVER_BINARY = $(DRIVER_BUNDLE)/Contents/MacOS/VirtualMicDriver
 DRIVER_PLIST  = Driver/VirtualMic.driver/Contents/Info.plist
-
-APP_SPM_SRC   = Sources/VirtualMicCli/main.swift Sources/VirtualMicCli/server.swift
-APP_BINARY    = build/VirtualMicCli
 
 GUI_SRC       = MacApp/VirtualMicGUI.swift MacApp/AppService.swift MacApp/AudioService.swift MacApp/ContentView.swift
 GUI_BUNDLE    = build/VirtualMic.app
@@ -55,9 +51,9 @@ SWIFTFLAGS    = -target arm64-apple-macos12.0 \
                 -O
 
 # ============================================================
-.PHONY: all driver app gui sign pkg install uninstall clean
+.PHONY: all driver gui sign pkg install uninstall clean
 
-all: driver app gui
+all: driver gui
 
 # ---- Driver bundle ----
 driver: $(DRIVER_BINARY)
@@ -74,20 +70,10 @@ $(DRIVER_BINARY): $(DRIVER_SRC) $(DRIVER_PLIST)
 	@cp $(DRIVER_PLIST) $(DRIVER_BUNDLE)/Contents/Info.plist
 	@echo "✓ Driver bundle built → $(DRIVER_BUNDLE)"
 
-# ---- Companion CLI (SPM + Swifter) ----
-app: $(APP_BINARY)
-
-$(APP_BINARY): $(APP_SPM_SRC) Package.swift
-	swift build -c release
-	@mkdir -p build
-	@cp .build/release/VirtualMicCli $(APP_BINARY)
-	codesign --force --sign - --entitlements App/entitlements.plist $(APP_BINARY)
-	@echo "✓ CLI built → $(APP_BINARY)"
-
 # ---- GUI app ----
 gui: $(GUI_BINARY)
 
-$(GUI_BINARY): $(GUI_SRC) $(APP_BINARY) $(DRIVER_BINARY)
+$(GUI_BINARY): $(GUI_SRC) $(DRIVER_BINARY)
 	@killall VirtualMic 2>/dev/null || true
 	@sleep 0.5
 	@mkdir -p $(GUI_BUNDLE)/Contents/MacOS
@@ -106,7 +92,6 @@ $(GUI_BINARY): $(GUI_SRC) $(APP_BINARY) $(DRIVER_BINARY)
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(VERSION)" $(GUI_BUNDLE)/Contents/Info.plist
 	@cp MacApp/AppIcon.icns $(GUI_BUNDLE)/Contents/Resources/AppIcon.icns
 	@cp -R $(DRIVER_BUNDLE) $(GUI_BUNDLE)/Contents/Resources/VirtualMic.driver
-	@cp $(APP_BINARY) $(GUI_BUNDLE)/Contents/Resources/VirtualMicCli
 	codesign --force --sign - --entitlements App/entitlements.plist $(GUI_BUNDLE)
 	@echo "✓ GUI app built → $(GUI_BUNDLE)"
 
@@ -116,16 +101,6 @@ sign: all
 	    --sign "$(DEVID)" \
 	    --identifier $(BUNDLE_ID) \
 	    $(DRIVER_BUNDLE)
-	codesign --force --options runtime \
-	    --sign "$(DEVID)" \
-	    --identifier $(APP_BUNDLE_ID) \
-	    --entitlements App/entitlements.plist \
-	    $(APP_BINARY)
-	codesign --force --options runtime \
-	    --sign "$(DEVID)" \
-	    --identifier $(APP_BUNDLE_ID) \
-	    --entitlements App/entitlements.plist \
-	    $(GUI_BUNDLE)/Contents/Resources/VirtualMicCli
 	codesign --force --options runtime \
 	    --sign "$(DEVID)" \
 	    --identifier $(GUI_BUNDLE_ID) \
@@ -149,10 +124,8 @@ notarize: sign
 pkg: sign
 	@rm -rf $(PKG_ROOT)
 	@mkdir -p $(PKG_ROOT)$(HAL_DIR)
-	@mkdir -p $(PKG_ROOT)/usr/local/bin
 	@mkdir -p $(PKG_ROOT)/Applications
 	@cp -R $(DRIVER_BUNDLE) $(PKG_ROOT)$(HAL_DIR)/
-	@cp    $(APP_BINARY)    $(PKG_ROOT)/usr/local/bin/VirtualMicCli
 	@cp -R $(GUI_BUNDLE)    $(PKG_ROOT)/Applications/
 	pkgbuild \
 	    --root $(PKG_ROOT) \
@@ -169,19 +142,17 @@ pkg: sign
 	@echo "✓ Installer → $(PKG_OUT)"
 
 # ---- Local install for testing ----
-install: driver app
+install: driver gui
 	sudo mkdir -p $(HAL_DIR)
 	sudo rm -rf $(HAL_DIR)/VirtualMic.driver
 	sudo cp -R $(DRIVER_BUNDLE) $(HAL_DIR)/
 	sudo chown -R root:wheel $(HAL_DIR)/VirtualMic.driver
-	sudo cp $(APP_BINARY) /usr/local/bin/VirtualMicCli
 	sudo killall -9 coreaudiod 2>/dev/null || true
 	@sleep 2
 	@echo "✓ Installed. Virtual mic should appear in Sound settings."
 
 uninstall:
 	sudo rm -rf $(HAL_DIR)/VirtualMic.driver
-	sudo rm -f  /usr/local/bin/VirtualMicCli
 	sudo killall -9 coreaudiod 2>/dev/null || true
 	@sleep 2
 	@echo "✓ Uninstalled. VirtualMic driver removed."

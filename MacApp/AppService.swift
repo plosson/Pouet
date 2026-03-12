@@ -3,6 +3,7 @@
 // Uses AudioService for all low-level audio operations
 
 import Foundation
+import AVFoundation
 import Combine
 
 // MARK: - Config
@@ -49,6 +50,8 @@ class AppService: ObservableObject {
     @Published var injectRingPercent = 0
     @Published var injectAvailableSamples = 0
     @Published var currentlyPlaying: String?
+    @Published var micPeakLevel: Float = 0.0
+    @Published var injectPeakLevel: Float = 0.0
 
     private var config: AppConfig
     private var pollTimer: Timer?
@@ -193,13 +196,22 @@ class AppService: ObservableObject {
 
     // MARK: - Polling
 
+    // Health checks (read on demand, not polled)
+    var hasMicPermission: Bool {
+        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    }
+    var virtualMicVisible: Bool { audio.virtualMicVisible }
+    var shmAvailable: Bool { audio.mainRing != nil && audio.injectRing != nil }
+
     private func startPolling() {
         pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             self.mainRingPercent = self.audio.mainRingFillPercent
             self.injectRingPercent = self.audio.injectRingFillPercent
             self.injectAvailableSamples = self.audio.injectRingAvailableSamples
+            self.micPeakLevel = self.audio.micPeakLevel
+            self.injectPeakLevel = self.audio.injectPeakLevel
 
             // Clear playing state when inject buffer drains
             if self.currentlyPlaying != nil && self.injectAvailableSamples == 0 {

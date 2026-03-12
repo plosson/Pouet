@@ -14,7 +14,7 @@
     <choice id="com.virtualmicdrv.driver.choice"
             visible="false"
             title="VirtualMic Driver"
-            description="Installs the VirtualMic Audio Server Plugin and CLI tool.">
+            description="Installs the VirtualMic Audio Server Plugin and app.">
         <pkg-ref id="com.virtualmicdrv.driver"/>
     </choice>
 
