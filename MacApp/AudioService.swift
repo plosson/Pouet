@@ -840,15 +840,19 @@ class AudioService {
             commonFormat: .pcmFormatFloat32,
             sampleRate: SAMPLE_RATE,
             channels: NUM_CHANNELS,
-            interleaved: true
+            interleaved: false
         ) else { return }
 
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount)) else { return }
         buffer.frameLength = AVAudioFrameCount(frameCount)
 
+        // Deinterleave: LRLRLR... → separate L and R channel buffers
         if let channelData = buffer.floatChannelData {
-            _ = samples.withUnsafeBufferPointer { src in
-                memcpy(channelData[0], src.baseAddress!, samples.count * MemoryLayout<Float>.size)
+            let ch = Int(NUM_CHANNELS)
+            for f in 0..<frameCount {
+                for c in 0..<ch {
+                    channelData[c][f] = samples[f * ch + c]
+                }
             }
         }
 
@@ -858,6 +862,7 @@ class AudioService {
             AVNumberOfChannelsKey: NUM_CHANNELS,
         ])
         try file.write(from: buffer)
+        Log.info("saveDashcamSnapshot: wrote \(frameCount) frames to \(url.lastPathComponent)")
     }
 
     // MARK: - Audio Injection
