@@ -39,7 +39,7 @@ struct AppConfig: Codable {
 
 // MARK: - AppService
 
-class AppService: ObservableObject {
+class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     let audio: AudioService
 
     // MARK: - Published State
@@ -79,12 +79,13 @@ class AppService: ObservableObject {
 
     // MARK: - Init
 
-    init() {
+    override init() {
         self.audio = AudioService()
         self.config = AppConfig.load()
         self.baseDir = config.baseDir
         self.volume = config.injectVolume ?? 1.0
         self.dashcamBufferSeconds = config.dashcamBufferSeconds ?? 5.0
+        super.init()
 
         // Ensure directories exist
         try? FileManager.default.createDirectory(
@@ -323,20 +324,18 @@ class AppService: ObservableObject {
         stopSnapshotPlayback()
         do {
             snapshotPlayer = try AVAudioPlayer(contentsOf: url)
+            snapshotPlayer?.delegate = self
             snapshotPlayer?.play()
             playingSnapshot = url
-            // Poll for completion
-            DispatchQueue.global().async { [weak self] in
-                while self?.snapshotPlayer?.isPlaying == true {
-                    Thread.sleep(forTimeInterval: 0.2)
-                }
-                DispatchQueue.main.async {
-                    self?.playingSnapshot = nil
-                }
-            }
         } catch {
             Log.error("Snapshot playback failed: \(error)")
             playingSnapshot = nil
+        }
+    }
+
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            self?.playingSnapshot = nil
         }
     }
 
