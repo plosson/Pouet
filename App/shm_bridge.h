@@ -4,17 +4,17 @@
 #include <fcntl.h>
 
 static inline int shm_open_rw(const char* name) {
-    return shm_open(name, O_RDWR, 0666);
+    return shm_open(name, O_RDWR, 0600);
 }
 
 static inline int shm_open_create(const char* name) {
-    return shm_open(name, O_RDWR | O_CREAT, 0666);
+    return shm_open(name, O_RDWR | O_CREAT, 0600);
 }
 
 // Unlink then create fresh with correct permissions
 static inline int shm_recreate(const char* name) {
     shm_unlink(name);
-    return shm_open(name, O_RDWR | O_CREAT, 0666);
+    return shm_open(name, O_RDWR | O_CREAT, 0600);
 }
 
 static inline void shm_cleanup(const char* name) {

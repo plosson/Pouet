@@ -237,9 +237,9 @@ static void SHM_OpenNamed(DeviceState* st, const char* name)
     if (st->shm) return;  // already mapped
 
     size_t sz = sizeof(VirtualMicSHM) + VIRTUALMICDRV_SHM_SIZE;
-    st->shmFd = shm_open(name, O_RDWR, 0666);
+    st->shmFd = shm_open(name, O_RDWR, 0600);
     if (st->shmFd < 0) {
-        st->shmFd = shm_open(name, O_RDWR | O_CREAT, 0666);
+        st->shmFd = shm_open(name, O_RDWR | O_CREAT, 0600);
         if (st->shmFd < 0) return;
         ftruncate(st->shmFd, (off_t)sz);
     }

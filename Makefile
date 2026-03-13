@@ -40,13 +40,13 @@ INSTALLER_ID  ?= Developer ID Installer: SPRL Losson (427N276E3Q)
 CC            = clang
 CFLAGS        = -arch arm64 -arch x86_64 \
                 -mmacosx-version-min=12.0 \
-                -O2 -fvisibility=hidden \
+                -O2 -fvisibility=hidden -fstack-protector-strong \
                 -Wall -Wextra \
                 -framework CoreAudio \
                 -framework CoreFoundation
 
 SWIFTC        = swiftc
-SWIFTFLAGS    = -target arm64-apple-macos12.0 \
+SWIFTFLAGS    = -target arm64-apple-macos13.0 \
                 -sdk $(shell xcrun --show-sdk-path) \
                 -O
 
@@ -78,9 +78,8 @@ $(GUI_BINARY): $(GUI_SRC) $(DRIVER_BINARY)
 	@sleep 0.5
 	@mkdir -p $(GUI_BUNDLE)/Contents/MacOS
 	@mkdir -p $(GUI_BUNDLE)/Contents/Resources
-	$(SWIFTC) -target arm64-apple-macos13.0 \
-	    -sdk $(shell xcrun --show-sdk-path) \
-	    -O -parse-as-library \
+	$(SWIFTC) $(SWIFTFLAGS) \
+	    -parse-as-library \
 	    -import-objc-header App/BridgingHeader.h \
 	    -framework CoreAudio \
 	    -framework AVFoundation \
