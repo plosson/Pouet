@@ -69,7 +69,7 @@ class SharedRingBuffer {
         }
     }
 
-    deinit { munmap(ptr, totalSize); close(fd) }
+    deinit { munmap(ptr, totalSize); close(fd); shm_cleanup(name) }
 
     var capacity: Int { Int(header.pointee.capacity) }
 

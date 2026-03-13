@@ -17,6 +17,10 @@ static inline int shm_recreate(const char* name) {
     return shm_open(name, O_RDWR | O_CREAT, 0666);
 }
 
+static inline void shm_cleanup(const char* name) {
+    shm_unlink(name);
+}
+
 // --- Atomic helpers for shared memory positions ---
 // Swift can't use C11 _Atomic directly; these inline functions bridge the gap.
 

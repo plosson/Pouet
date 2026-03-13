@@ -257,6 +257,18 @@ static void SHM_OpenNamed(DeviceState* st, const char* name)
     }
 }
 
+static void SHM_Close(DeviceState* st) {
+    if (st->shm) {
+        size_t sz = sizeof(VirtualMicSHM) + VIRTUALMICDRV_SHM_SIZE;
+        munmap(st->shm, sz);
+        st->shm = NULL;
+    }
+    if (st->shmFd >= 0) {
+        close(st->shmFd);
+        st->shmFd = -1;
+    }
+}
+
 // Read `numFrames` stereo frames from ring buffer into `out` (for VirtualMic input).
 // If not enough data: fill silence.
 // If too much data buffered: skip ahead to the freshest samples to minimize latency.
@@ -1010,7 +1022,12 @@ static OSStatus VirtualMic_StopIO(AudioServerPlugInDriverRef inDriver,
     if (!st) return kAudioHardwareBadDeviceError;
 
     pthread_mutex_lock(&gDriver.stateLock);
-    if (st->ioRunning > 0) st->ioRunning--;
+    if (st->ioRunning > 0) {
+        st->ioRunning--;
+        if (st->ioRunning == 0) {
+            SHM_Close(st);
+        }
+    }
     pthread_mutex_unlock(&gDriver.stateLock);
     return kAudioHardwareNoError;
 }
