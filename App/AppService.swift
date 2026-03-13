@@ -111,41 +111,14 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         originalInputDeviceID = audio.getNonVirtualDefaultDevice(input: true)
         originalOutputDeviceID = audio.getNonVirtualDefaultDevice(input: false)
 
-        // Auto-start mic proxy: saved device or system default
-        let micDevice: AudioDeviceInfo? = {
-            if let saved = config.selectedDevice,
-               let dev = audio.findDevice(matching: saved) { return dev }
-            return audio.defaultDevice(input: true)
-        }()
-        if let device = micDevice {
-            selectedDevice = device.name
-            do {
-                try audio.startProxy(deviceID: device.id, deviceName: device.name, inputChannels: device.inputChannels, volume: volume)
-                proxyRunning = true
-                proxyDeviceName = device.name
-                config.selectedDevice = device.name
-            } catch {
-                Log.error("Auto-start mic proxy failed: \(error)")
-            }
-        }
+        // Auto-start proxies: saved device or system default
+        let micName = config.selectedDevice
+            ?? audio.defaultDevice(input: true)?.name
+        if let name = micName { selectMicDevice(name) }
 
-        // Auto-start speaker proxy: saved device or system default
-        let outputDevice: AudioDeviceInfo? = {
-            if let saved = config.selectedOutputDevice,
-               let dev = audio.findOutputDevice(matching: saved) { return dev }
-            return audio.defaultDevice(input: false)
-        }()
-        if let device = outputDevice {
-            selectedOutputDevice = device.name
-            do {
-                try audio.startSpeakerProxy(deviceID: device.id, deviceName: device.name, bufferDuration: dashcamBufferSeconds)
-                speakerProxyRunning = true
-                speakerProxyDeviceName = device.name
-                config.selectedOutputDevice = device.name
-            } catch {
-                Log.error("Auto-start speaker proxy failed: \(error)")
-            }
-        }
+        let outputName = config.selectedOutputDevice
+            ?? audio.defaultDevice(input: false)?.name
+        if let name = outputName { selectOutputDevice(name) }
 
         config.save()
 
@@ -208,35 +181,31 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         }
     }
 
-    // MARK: - Proxy Control
+    // MARK: - Device Selection (auto-starts proxy)
 
-    func startProxy(deviceName: String) throws {
-        guard let device = audio.findDevice(matching: deviceName) else {
-            throw NSError(domain: "AppService", code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: "Device not found: \(deviceName)"])
+    func selectMicDevice(_ name: String) {
+        guard let device = audio.findDevice(matching: name) else {
+            Log.error("Mic device not found: \(name)")
+            return
         }
-        try audio.startProxy(deviceID: device.id, deviceName: device.name, inputChannels: device.inputChannels, volume: volume)
-        proxyRunning = true
-        proxyDeviceName = device.name
-        selectedDevice = device.name
-        config.selectedDevice = device.name
-        config.save()
+        do {
+            try audio.startProxy(deviceID: device.id, deviceName: device.name, inputChannels: device.inputChannels, volume: volume)
+            proxyRunning = true
+            proxyDeviceName = device.name
+            selectedDevice = device.name
+            config.selectedDevice = device.name
+            config.save()
+        } catch {
+            Log.error("Mic proxy failed: \(error)")
+            proxyRunning = false
+            proxyDeviceName = nil
+        }
     }
 
-    func stopProxy() {
-        audio.stopProxy()
-        proxyRunning = false
-        proxyDeviceName = nil
-        // Refresh devices (may have changed while proxy held the device)
-        loadDevices()
-    }
-
-    // MARK: - Speaker Proxy (Dashcam)
-
-    func startSpeakerProxy(deviceName: String) throws {
-        guard let device = audio.findOutputDevice(matching: deviceName) else {
-            throw NSError(domain: "AppService", code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: "Output device not found: \(deviceName)"])
+    func selectOutputDevice(_ name: String) {
+        guard let device = audio.findOutputDevice(matching: name) else {
+            Log.error("Output device not found: \(name)")
+            return
         }
         do {
             try audio.startSpeakerProxy(deviceID: device.id, deviceName: device.name, bufferDuration: dashcamBufferSeconds)
@@ -247,18 +216,10 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
             config.save()
             Log.info("Speaker proxy started: \(device.name) (buffer: \(dashcamBufferSeconds)s)")
         } catch {
+            Log.error("Speaker proxy start failed: \(error)")
             speakerProxyRunning = false
             speakerProxyDeviceName = nil
-            Log.error("Speaker proxy start failed: \(error)")
-            throw error
         }
-    }
-
-    func stopSpeakerProxy() {
-        audio.stopSpeakerProxy()
-        speakerProxyRunning = false
-        speakerProxyDeviceName = nil
-        loadOutputDevices()
     }
 
     func setDashcamBufferSeconds(_ seconds: Double) {
@@ -267,16 +228,8 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         config.save()
 
         // Restart proxy with new buffer duration if running
-        if speakerProxyRunning, let deviceName = speakerProxyDeviceName {
-            audio.stopSpeakerProxy()
-            do {
-                try audio.startSpeakerProxy(deviceID: audio.findOutputDevice(matching: deviceName)!.id,
-                                            deviceName: deviceName, bufferDuration: dashcamBufferSeconds)
-            } catch {
-                speakerProxyRunning = false
-                speakerProxyDeviceName = nil
-                Log.error("Failed to restart speaker proxy: \(error)")
-            }
+        if let deviceName = speakerProxyDeviceName {
+            selectOutputDevice(deviceName)
         }
     }
 

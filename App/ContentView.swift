@@ -108,22 +108,12 @@ struct ContentView: View {
 
     private var headerBar: some View {
         HStack(spacing: 8) {
-            // Left: Mic proxy
-            headerProxyButton(
-                running: app.proxyRunning,
-                disabled: app.selectedDevice.isEmpty,
-                onStart: {
-                    do { try app.startProxy(deviceName: app.selectedDevice); showToast("Mic proxy started") }
-                    catch { showToast("Error: \(error.localizedDescription)") }
-                },
-                onStop: { app.stopProxy(); showToast("Mic proxy stopped") }
-            )
+            // Left: Mic input
+            statusDot(active: app.proxyRunning)
 
             Menu {
-                Button("-- Select microphone --") { app.selectedDevice = "" }
-                Divider()
                 ForEach(app.devices) { dev in
-                    Button("\(dev.name) (\(dev.inputChannels) ch)") { app.selectedDevice = dev.name }
+                    Button("\(dev.name) (\(dev.inputChannels) ch)") { app.selectMicDevice(dev.name) }
                 }
             } label: {
                 headerDropdownLabel(
@@ -131,16 +121,13 @@ struct ContentView: View {
                     value: app.selectedDevice, color: Theme.purple
                 )
             }
-            .disabled(app.proxyRunning)
 
             Spacer()
 
-            // Right: Speaker proxy
+            // Right: Speaker output
             Menu {
-                Button("-- Select output --") { app.selectedOutputDevice = "" }
-                Divider()
                 ForEach(app.outputDevices) { dev in
-                    Button(dev.name) { app.selectedOutputDevice = dev.name }
+                    Button(dev.name) { app.selectOutputDevice(dev.name) }
                 }
             } label: {
                 headerDropdownLabel(
@@ -148,47 +135,17 @@ struct ContentView: View {
                     value: app.selectedOutputDevice, color: Theme.accent
                 )
             }
-            .disabled(app.speakerProxyRunning)
 
-            headerProxyButton(
-                running: app.speakerProxyRunning,
-                disabled: app.selectedOutputDevice.isEmpty,
-                onStart: {
-                    do { try app.startSpeakerProxy(deviceName: app.selectedOutputDevice); showToast("Speaker proxy started") }
-                    catch { showToast("Error: \(error.localizedDescription)") }
-                },
-                onStop: { app.stopSpeakerProxy(); showToast("Speaker proxy stopped") }
-            )
+            statusDot(active: app.speakerProxyRunning)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
     }
 
-    private func headerProxyButton(running: Bool, disabled: Bool, onStart: @escaping () -> Void, onStop: @escaping () -> Void) -> some View {
-        Group {
-            if running {
-                Button(action: onStop) {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 9))
-                        .foregroundColor(.white)
-                        .frame(width: 28, height: 28)
-                        .background(Color.red.opacity(0.8))
-                        .cornerRadius(6)
-                }
-                .buttonStyle(.plain)
-            } else {
-                Button(action: onStart) {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 9))
-                        .foregroundColor(disabled ? Theme.dimText : Theme.bg)
-                        .frame(width: 28, height: 28)
-                        .background(disabled ? Color.white.opacity(0.05) : Theme.accent)
-                        .cornerRadius(6)
-                }
-                .buttonStyle(.plain)
-                .disabled(disabled)
-            }
-        }
+    private func statusDot(active: Bool) -> some View {
+        Circle()
+            .fill(active ? Theme.accent : Color.red.opacity(0.6))
+            .frame(width: 8, height: 8)
     }
 
     private func headerDropdownLabel(icon: String, placeholder: String, value: String, color: Color) -> some View {
@@ -842,8 +799,8 @@ struct ContentView: View {
     }
 
     private func performUninstall() {
-        // Stop proxy first so the app doesn't crash when the driver disappears
-        app.stopProxy()
+        // Shutdown proxies first so the app doesn't crash when the driver disappears
+        app.shutdown()
 
         let script = """
         do shell script "rm -rf /Library/Audio/Plug-Ins/HAL/VirtualMic.driver; \
