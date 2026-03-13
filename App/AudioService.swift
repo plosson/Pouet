@@ -78,7 +78,7 @@ class SharedRingBuffer {
             let wp = header.pointee.writePos
             let rp = header.pointee.readPos
             let avail = cap - Int(wp - rp)
-            if avail <= 0 { usleep(500); continue }
+            if avail <= 0 { sched_yield(); continue }
             let chunk = min(avail, count - written)
             for i in 0..<chunk {
                 let idx = Int((wp + UInt64(i)) % UInt64(cap))
@@ -170,6 +170,11 @@ class MicProxy {
     private let mixBufSize = 2048
     private var injectBuf: [Float]
 
+    // Pre-allocated RT-safe buffers (sized for max expected callback)
+    let rtBufCapacity = 4096  // max frames * channels, generous
+    let captureBuffer: UnsafeMutablePointer<Float>
+    let rtInjectBuffer: UnsafeMutablePointer<Float>
+
     private let speakerBufCapacity = 48000 * 2 * 2
     private let speakerRing: UnsafeMutablePointer<Float>
     private var speakerWritePos: UInt64 = 0
@@ -180,6 +185,8 @@ class MicProxy {
         self.mainRing = mainRing
         self.injectRing = injectRing
         self.injectBuf = [Float](repeating: 0, count: mixBufSize)
+        self.captureBuffer = UnsafeMutablePointer<Float>.allocate(capacity: rtBufCapacity)
+        self.rtInjectBuffer = UnsafeMutablePointer<Float>.allocate(capacity: rtBufCapacity)
         self.speakerRing = UnsafeMutablePointer<Float>.allocate(capacity: speakerBufCapacity)
         self.speakerRing.initialize(repeating: 0, count: speakerBufCapacity)
     }
@@ -288,6 +295,8 @@ class MicProxy {
             AudioComponentInstanceDispose(unit)
             outputUnit = nil
         }
+        captureBuffer.deallocate()
+        rtInjectBuffer.deallocate()
         speakerRing.deallocate()
     }
 
@@ -530,8 +539,8 @@ private func micInputCallback(
 ) -> OSStatus {
     let proxy = Unmanaged<MicProxy>.fromOpaque(inRefCon).takeUnretainedValue()
     let numSamples = Int(inNumberFrames) * Int(NUM_CHANNELS)
-    let captureBuffer = UnsafeMutablePointer<Float>.allocate(capacity: numSamples)
-    defer { captureBuffer.deallocate() }
+    let captureBuffer = proxy.captureBuffer
+    guard numSamples <= proxy.rtBufCapacity else { return noErr }
 
     var bufferList = AudioBufferList(
         mNumberBuffers: 1,
@@ -559,8 +568,7 @@ private func micInputCallback(
     proxy.micPeakLevel = micPeak
 
     // Read + mix inject audio
-    let injectBuffer = UnsafeMutablePointer<Float>.allocate(capacity: numSamples)
-    defer { injectBuffer.deallocate() }
+    let injectBuffer = proxy.rtInjectBuffer
     let injectCount = proxy.injectRing.read(into: injectBuffer, maxSamples: numSamples)
 
     if injectCount > 0 {
