@@ -75,7 +75,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     var soundsDir: String { (baseDir as NSString).appendingPathComponent("Sounds") }
     var snapshotsDir: String { (baseDir as NSString).appendingPathComponent("Recordings") }
 
-    private static let pollIntervalSeconds = 0.15    // balance UI responsiveness vs CPU
+    private static let pollIntervalSeconds = 0.05    // 50ms — smooth meters without excessive CPU
     private static let peakChangeThreshold: Float = 0.005  // 0.5% of full scale, avoids UI thrashing
     private static let maxRecentSnapshots = 5
 

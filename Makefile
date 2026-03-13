@@ -70,6 +70,8 @@ $(DRIVER_BINARY): $(DRIVER_SRC) $(DRIVER_PLIST)
 	    -o $(DRIVER_BINARY) \
 	    $(DRIVER_SRC)
 	@cp $(DRIVER_PLIST) $(DRIVER_BUNDLE)/Contents/Info.plist
+	@/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" $(DRIVER_BUNDLE)/Contents/Info.plist
+	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(VERSION)" $(DRIVER_BUNDLE)/Contents/Info.plist
 	@echo "✓ Driver bundle built → $(DRIVER_BUNDLE)"
 
 # ---- GUI app ----
