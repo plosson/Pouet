@@ -427,10 +427,11 @@ struct ContentView: View {
             card {
                 VStack(spacing: 14) {
                     Button {
-                        if let url = app.saveDashcamSnapshot() {
+                        let result = app.saveDashcamSnapshot()
+                        if let url = result.url {
                             showToast("Saved: \(url.lastPathComponent)")
                         } else {
-                            showToast("Snapshot failed — is speaker proxy running?")
+                            showToast("Snapshot failed: \(result.error ?? "unknown error")")
                         }
                     } label: {
                         HStack(spacing: 8) {

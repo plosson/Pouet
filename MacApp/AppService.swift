@@ -221,7 +221,11 @@ class AppService: ObservableObject {
         }
     }
 
-    func saveDashcamSnapshot() -> URL? {
+    func saveDashcamSnapshot() -> (url: URL?, error: String?) {
+        guard audio.isSpeakerProxyRunning else {
+            return (nil, "Speaker proxy not running")
+        }
+
         let snapshotDir = (NSHomeDirectory() as NSString).appendingPathComponent("VirtualMicDashcam")
         try? FileManager.default.createDirectory(atPath: snapshotDir, withIntermediateDirectories: true)
 
@@ -233,10 +237,10 @@ class AppService: ObservableObject {
         do {
             try audio.saveDashcamSnapshot(to: url)
             lastSnapshotURL = url
-            return url
+            return (url, nil)
         } catch {
             print("[AppService] Dashcam snapshot failed: \(error)")
-            return nil
+            return (nil, error.localizedDescription)
         }
     }
 
