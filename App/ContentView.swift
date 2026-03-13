@@ -809,13 +809,17 @@ struct ContentView: View {
         chown -R root:wheel \(dst)/VirtualMic.driver; \
         killall -9 coreaudiod 2>/dev/null || true" with administrator privileges
         """
-        var error: NSDictionary?
-        if let appleScript = NSAppleScript(source: script) {
-            appleScript.executeAndReturnError(&error)
-            if error == nil {
-                showToast("Driver installed — restarting Core Audio")
-            } else {
-                showToast("Install cancelled or failed")
+        DispatchQueue.global(qos: .userInitiated).async {
+            var error: NSDictionary?
+            if let appleScript = NSAppleScript(source: script) {
+                appleScript.executeAndReturnError(&error)
+                DispatchQueue.main.async {
+                    if error == nil {
+                        showToast("Driver installed — restarting Core Audio")
+                    } else {
+                        showToast("Install cancelled or failed")
+                    }
+                }
             }
         }
     }
@@ -828,15 +832,19 @@ struct ContentView: View {
         do shell script "rm -rf /Library/Audio/Plug-Ins/HAL/VirtualMic.driver; \
         killall -9 coreaudiod 2>/dev/null || true" with administrator privileges
         """
-        var error: NSDictionary?
-        if let appleScript = NSAppleScript(source: script) {
-            appleScript.executeAndReturnError(&error)
-            if error == nil {
-                showToast("Driver uninstalled — Core Audio restarted")
-                // Refresh device list since VirtualMic is now gone
-                app.loadDevices()
-            } else {
-                showToast("Uninstall cancelled or failed")
+        DispatchQueue.global(qos: .userInitiated).async {
+            var error: NSDictionary?
+            if let appleScript = NSAppleScript(source: script) {
+                appleScript.executeAndReturnError(&error)
+                DispatchQueue.main.async {
+                    if error == nil {
+                        showToast("Driver uninstalled — Core Audio restarted")
+                        // Refresh device list since VirtualMic is now gone
+                        app.loadDevices()
+                    } else {
+                        showToast("Uninstall cancelled or failed")
+                    }
+                }
             }
         }
     }

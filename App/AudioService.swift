@@ -19,7 +19,9 @@ let NUM_CHANNELS: UInt32 = 2
 
 struct SHMHeader {
     var writePos: UInt64
+    var _pad1: (UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64) = (0,0,0,0,0,0,0)  // 56 bytes
     var readPos:  UInt64
+    var _pad2: (UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64) = (0,0,0,0,0,0,0)  // 56 bytes
     var capacity: UInt32
     var pad:      UInt32
 }
@@ -62,37 +64,39 @@ class SharedRingBuffer {
         let cap = UInt32(SHM_DATA_SIZE / MemoryLayout<Float>.size)
         if header.pointee.capacity == 0 {
             header.pointee.capacity = cap
-            header.pointee.writePos = 0
-            header.pointee.readPos  = 0
+            shm_store_write_pos(header, 0)
+            shm_store_read_pos(header, 0)
         }
     }
 
-    deinit { munmap(ptr, totalSize); close(fd) }
+    deinit { munmap(ptr, totalSize); close(fd); shm_cleanup(name) }
 
     var capacity: Int { Int(header.pointee.capacity) }
 
     func write(_ samples: UnsafePointer<Float>, count: Int) {
         let cap = capacity
+        let rawHeader = UnsafeMutableRawPointer(header)
         var written = 0
         while written < count {
-            let wp = header.pointee.writePos
-            let rp = header.pointee.readPos
+            let wp = shm_load_write_pos(rawHeader)
+            let rp = shm_load_read_pos(rawHeader)
             let avail = cap - Int(wp - rp)
-            if avail <= 0 { usleep(500); continue }
+            if avail <= 0 { sched_yield(); continue }
             let chunk = min(avail, count - written)
             for i in 0..<chunk {
                 let idx = Int((wp + UInt64(i)) % UInt64(cap))
                 data[idx] = samples[written + i]
             }
-            header.pointee.writePos = wp + UInt64(chunk)
+            shm_store_write_pos(rawHeader, wp + UInt64(chunk))
             written += chunk
         }
     }
 
     func tryWrite(_ samples: UnsafePointer<Float>, count: Int) -> Int {
         let cap = capacity
-        let wp = header.pointee.writePos
-        let rp = header.pointee.readPos
+        let rawHeader = UnsafeMutableRawPointer(header)
+        let wp = shm_load_write_pos(rawHeader)
+        let rp = shm_load_read_pos(rawHeader)
         let avail = cap - Int(wp - rp)
         if avail <= 0 { return 0 }
         let ch = Int(NUM_CHANNELS)
@@ -102,7 +106,7 @@ class SharedRingBuffer {
             let idx = Int((wp + UInt64(i)) % UInt64(cap))
             data[idx] = samples[i]
         }
-        header.pointee.writePos = wp + UInt64(chunk)
+        shm_store_write_pos(rawHeader, wp + UInt64(chunk))
         return chunk
     }
 
@@ -114,8 +118,9 @@ class SharedRingBuffer {
 
     func read(into buffer: UnsafeMutablePointer<Float>, maxSamples: Int) -> Int {
         let cap = capacity
-        let wp = header.pointee.writePos
-        let rp = header.pointee.readPos
+        let rawHeader = UnsafeMutableRawPointer(header)
+        let wp = shm_load_write_pos(rawHeader)
+        let rp = shm_load_read_pos(rawHeader)
         let avail = Int(wp - rp)
         if avail <= 0 { return 0 }
         let toRead = min(avail, maxSamples)
@@ -123,22 +128,25 @@ class SharedRingBuffer {
             let idx = Int((rp + UInt64(i)) % UInt64(cap))
             buffer[i] = data[idx]
         }
-        header.pointee.readPos = rp + UInt64(toRead)
+        shm_store_read_pos(rawHeader, rp + UInt64(toRead))
         return toRead
     }
 
     func clear() {
-        header.pointee.readPos = header.pointee.writePos
+        let rawHeader = UnsafeMutableRawPointer(header)
+        shm_store_read_pos(rawHeader, shm_load_write_pos(rawHeader))
     }
 
     var fillPercent: Int {
         let cap = capacity
-        let used = Int(header.pointee.writePos - header.pointee.readPos)
+        let rawHeader = UnsafeMutableRawPointer(header)
+        let used = Int(shm_load_write_pos(rawHeader) - shm_load_read_pos(rawHeader))
         return cap > 0 ? min(100, used * 100 / cap) : 0
     }
 
     var availableSamples: Int {
-        return Int(header.pointee.writePos - header.pointee.readPos)
+        let rawHeader = UnsafeMutableRawPointer(header)
+        return Int(shm_load_write_pos(rawHeader) - shm_load_read_pos(rawHeader))
     }
 }
 
@@ -166,9 +174,15 @@ class MicProxy {
     var audioUnit: AudioComponentInstance?
     private var outputUnit: AudioComponentInstance?
     private var outputRunning = false
+    var idleCallbackCount: Int = 0
 
     private let mixBufSize = 2048
     private var injectBuf: [Float]
+
+    // Pre-allocated RT-safe buffers (sized for max expected callback)
+    let rtBufCapacity = 4096  // max frames * channels, generous
+    let captureBuffer: UnsafeMutablePointer<Float>
+    let rtInjectBuffer: UnsafeMutablePointer<Float>
 
     private let speakerBufCapacity = 48000 * 2 * 2
     private let speakerRing: UnsafeMutablePointer<Float>
@@ -180,6 +194,8 @@ class MicProxy {
         self.mainRing = mainRing
         self.injectRing = injectRing
         self.injectBuf = [Float](repeating: 0, count: mixBufSize)
+        self.captureBuffer = UnsafeMutablePointer<Float>.allocate(capacity: rtBufCapacity)
+        self.rtInjectBuffer = UnsafeMutablePointer<Float>.allocate(capacity: rtBufCapacity)
         self.speakerRing = UnsafeMutablePointer<Float>.allocate(capacity: speakerBufCapacity)
         self.speakerRing.initialize(repeating: 0, count: speakerBufCapacity)
     }
@@ -288,6 +304,8 @@ class MicProxy {
             AudioComponentInstanceDispose(unit)
             outputUnit = nil
         }
+        captureBuffer.deallocate()
+        rtInjectBuffer.deallocate()
         speakerRing.deallocate()
     }
 
@@ -297,7 +315,7 @@ class MicProxy {
         outputRunning = true
     }
 
-    fileprivate func stopOutputIfIdle() {
+    func stopOutputIfIdle() {
         guard outputRunning, let ou = outputUnit else { return }
         AudioOutputUnitStop(ou)
         outputRunning = false
@@ -310,9 +328,11 @@ class MicProxy {
             speakerRing[idx] = samples[i]
             speakerWritePos += 1
         }
+        shm_memory_barrier()
     }
 
     fileprivate func dequeueSpeakerSamples(into buffer: UnsafeMutablePointer<Float>, count: Int) -> Int {
+        shm_memory_barrier()
         let avail = Int(speakerWritePos - speakerReadPos)
         let toRead = min(avail, count)
         let cap = speakerBufCapacity
@@ -530,8 +550,8 @@ private func micInputCallback(
 ) -> OSStatus {
     let proxy = Unmanaged<MicProxy>.fromOpaque(inRefCon).takeUnretainedValue()
     let numSamples = Int(inNumberFrames) * Int(NUM_CHANNELS)
-    let captureBuffer = UnsafeMutablePointer<Float>.allocate(capacity: numSamples)
-    defer { captureBuffer.deallocate() }
+    let captureBuffer = proxy.captureBuffer
+    guard numSamples <= proxy.rtBufCapacity else { return noErr }
 
     var bufferList = AudioBufferList(
         mNumberBuffers: 1,
@@ -559,8 +579,7 @@ private func micInputCallback(
     proxy.micPeakLevel = micPeak
 
     // Read + mix inject audio
-    let injectBuffer = UnsafeMutablePointer<Float>.allocate(capacity: numSamples)
-    defer { injectBuffer.deallocate() }
+    let injectBuffer = proxy.rtInjectBuffer
     let injectCount = proxy.injectRing.read(into: injectBuffer, maxSamples: numSamples)
 
     if injectCount > 0 {
@@ -603,7 +622,9 @@ private func speakerOutputCallback(
         }
     }
     if !hadData {
-        DispatchQueue.global().async { proxy.stopOutputIfIdle() }
+        proxy.idleCallbackCount += 1
+    } else {
+        proxy.idleCallbackCount = 0
     }
     return noErr
 }

@@ -39,7 +39,7 @@ struct AppConfig: Codable {
 
 // MARK: - AppService
 
-class AppService: ObservableObject {
+class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     let audio: AudioService
 
     // MARK: - Published State
@@ -79,12 +79,13 @@ class AppService: ObservableObject {
 
     // MARK: - Init
 
-    init() {
+    override init() {
         self.audio = AudioService()
         self.config = AppConfig.load()
         self.baseDir = config.baseDir
         self.volume = config.injectVolume ?? 1.0
         self.dashcamBufferSeconds = config.dashcamBufferSeconds ?? 5.0
+        super.init()
 
         // Ensure directories exist
         try? FileManager.default.createDirectory(
@@ -323,20 +324,18 @@ class AppService: ObservableObject {
         stopSnapshotPlayback()
         do {
             snapshotPlayer = try AVAudioPlayer(contentsOf: url)
+            snapshotPlayer?.delegate = self
             snapshotPlayer?.play()
             playingSnapshot = url
-            // Poll for completion
-            DispatchQueue.global().async { [weak self] in
-                while self?.snapshotPlayer?.isPlaying == true {
-                    Thread.sleep(forTimeInterval: 0.2)
-                }
-                DispatchQueue.main.async {
-                    self?.playingSnapshot = nil
-                }
-            }
         } catch {
             Log.error("Snapshot playback failed: \(error)")
             playingSnapshot = nil
+        }
+    }
+
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            self?.playingSnapshot = nil
         }
     }
 
@@ -418,18 +417,30 @@ class AppService: ObservableObject {
 
     private func startPolling() {
         pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
             guard let self = self else { return }
-            self.mainRingPercent = self.audio.mainRingFillPercent
-            self.injectRingPercent = self.audio.injectRingFillPercent
-            self.injectAvailableSamples = self.audio.injectRingAvailableSamples
-            self.micPeakLevel = self.audio.micPeakLevel
-            self.injectPeakLevel = self.audio.injectPeakLevel
-            self.speakerPeakLevel = self.audio.speakerPeakLevel
+            let newMainRing = self.audio.mainRingFillPercent
+            let newInjectRing = self.audio.injectRingFillPercent
+            let newInjectSamples = self.audio.injectRingAvailableSamples
+            let newMicPeak = self.audio.micPeakLevel
+            let newInjectPeak = self.audio.injectPeakLevel
+            let newSpeakerPeak = self.audio.speakerPeakLevel
 
-            // Clear playing state when inject buffer drains
+            if newMainRing != self.mainRingPercent { self.mainRingPercent = newMainRing }
+            if newInjectRing != self.injectRingPercent { self.injectRingPercent = newInjectRing }
+            if newInjectSamples != self.injectAvailableSamples { self.injectAvailableSamples = newInjectSamples }
+            if abs(newMicPeak - self.micPeakLevel) > 0.005 { self.micPeakLevel = newMicPeak }
+            if abs(newInjectPeak - self.injectPeakLevel) > 0.005 { self.injectPeakLevel = newInjectPeak }
+            if abs(newSpeakerPeak - self.speakerPeakLevel) > 0.005 { self.speakerPeakLevel = newSpeakerPeak }
+
             if self.currentlyPlaying != nil && self.injectAvailableSamples == 0 {
                 self.currentlyPlaying = nil
+            }
+
+            // Stop speaker output after idle period
+            if let proxy = self.audio.proxy, proxy.idleCallbackCount > 50 {
+                proxy.stopOutputIfIdle()
+                proxy.idleCallbackCount = 0
             }
         }
     }
