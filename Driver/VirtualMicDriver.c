@@ -31,7 +31,9 @@
 // Ring buffer header lives at the start of the shared memory region.
 typedef struct {
     _Atomic uint64_t writePos;  // samples written (producer increments)
+    char             _pad1[56]; // pad to 64-byte cache line boundary
     _Atomic uint64_t readPos;   // samples consumed (consumer increments)
+    char             _pad2[56]; // pad to 64-byte cache line boundary
     uint32_t         capacity;  // total float samples in data[]
     uint32_t         _pad;
     float            data[];    // interleaved PCM frames follow

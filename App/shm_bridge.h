@@ -25,7 +25,9 @@ static inline int shm_recreate(const char* name) {
 
 typedef struct {
     _Atomic uint64_t writePos;
+    char             _pad1[56];
     _Atomic uint64_t readPos;
+    char             _pad2[56];
     uint32_t         capacity;
     uint32_t         _pad;
     // float data[] follows

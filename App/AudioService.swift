@@ -19,7 +19,9 @@ let NUM_CHANNELS: UInt32 = 2
 
 struct SHMHeader {
     var writePos: UInt64
+    var _pad1: (UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64) = (0,0,0,0,0,0,0)  // 56 bytes
     var readPos:  UInt64
+    var _pad2: (UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64) = (0,0,0,0,0,0,0)  // 56 bytes
     var capacity: UInt32
     var pad:      UInt32
 }
