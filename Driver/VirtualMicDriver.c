@@ -771,7 +771,7 @@ static OSStatus VirtualMic_GetPropertyData(AudioServerPlugInDriverRef inDriver,
             *(CFStringRef*)outData = CFStringCreateWithCString(NULL, desc->modelUID, kCFStringEncodingUTF8);
             *outDataSize = sizeof(CFStringRef); return kAudioHardwareNoError;
         case kAudioDevicePropertyTransportType:
-            *(UInt32*)outData = kAudioDeviceTransportTypeVirtual;
+            *(UInt32*)outData = kAudioDeviceTransportTypeBuiltIn;
             *outDataSize = sizeof(UInt32); return kAudioHardwareNoError;
         case kAudioDevicePropertyRelatedDevices:
             *(AudioObjectID*)outData = desc->deviceID;
