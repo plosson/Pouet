@@ -107,7 +107,7 @@ $(UNINSTALLER): Uninstaller/uninstall.sh Uninstaller/Info.plist
 	@cp Uninstaller/uninstall.sh "$(UNINSTALLER)/Contents/MacOS/uninstall.sh"
 	@chmod +x "$(UNINSTALLER)/Contents/MacOS/uninstall.sh"
 	@cp Uninstaller/Info.plist "$(UNINSTALLER)/Contents/Info.plist"
-	@cp App/AppIcon.icns "$(UNINSTALLER)/Contents/Resources/AppIcon.icns"
+	@cp App/UninstallIcon.icns "$(UNINSTALLER)/Contents/Resources/AppIcon.icns"
 	@echo "✓ Uninstaller built → $(UNINSTALLER)"
 
 # ---- Code signing ----
