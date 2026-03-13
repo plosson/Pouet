@@ -55,6 +55,26 @@ struct ContentView: View {
                     .background(Theme.bg)
                 }
 
+                // Version bar
+                Divider().background(Theme.cardBorder)
+                HStack {
+                    Text("VirtualMic")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(Theme.bodyText)
+                    Text("·")
+                        .foregroundColor(Theme.dimText)
+                    Text("Virtual microphone proxy with audio injection")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.dimText)
+                    Spacer()
+                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(Theme.dimText)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+                .background(Theme.bg)
+
                 // Toast
                 if let msg = toast {
                     HStack(spacing: 6) {
@@ -469,67 +489,63 @@ struct ContentView: View {
 
     private var settingsTab: some View {
         VStack(spacing: 12) {
-            // Sounds folder — full width
+            // Base folder
             card {
-                VStack(alignment: .leading, spacing: 12) {
-                    cardTitle("Sounds Folder", icon: "folder.fill")
-                    HStack(spacing: 8) {
-                        Text(app.soundsDir.isEmpty ? "~/VirtualMicSounds" : app.soundsDir)
-                            .font(.system(size: 12))
+                VStack(alignment: .leading, spacing: 10) {
+                    cardTitle("Base Folder", icon: "folder.fill")
+                    HStack(spacing: 6) {
+                        Text(app.baseDir)
+                            .font(.system(size: 11))
                             .foregroundColor(Theme.bodyText)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(Color.white.opacity(0.04))
                             .cornerRadius(6)
                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.cardBorder, lineWidth: 1))
 
-                        Button { pickSoundsFolder() } label: {
+                        Button(action: pickBaseFolder) {
                             Text("Browse")
-                                .font(.system(size: 11, weight: .medium))
+                                .font(.system(size: 10, weight: .medium))
                                 .foregroundColor(Theme.accent)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
                                 .background(Theme.accent.opacity(0.12))
                                 .cornerRadius(6)
                         }
                         .buttonStyle(.plain)
 
-                        Button {
-                            if !app.soundsDir.isEmpty {
-                                NSWorkspace.shared.open(URL(fileURLWithPath: app.soundsDir))
-                            }
-                        } label: {
+                        Button { NSWorkspace.shared.open(URL(fileURLWithPath: app.baseDir)) } label: {
                             Image(systemName: "arrow.up.forward.square")
-                                .font(.system(size: 12))
+                                .font(.system(size: 11))
                                 .foregroundColor(Theme.dimText)
-                                .frame(width: 28, height: 28)
+                                .frame(width: 26, height: 26)
                                 .background(Color.white.opacity(0.04))
                                 .cornerRadius(6)
                         }
                         .buttonStyle(.plain)
                         .help("Open in Finder")
                     }
+                    Text("Sounds stored in /Sounds, recordings in /Recordings")
+                        .font(.system(size: 10))
+                        .foregroundColor(Theme.dimText)
                 }
             }
 
-            // Two columns
+            // Two columns: Controls (left) | Status (right)
             HStack(alignment: .top, spacing: 12) {
-                // Left: Audio Monitoring
-                VStack(spacing: 12) {
-                    card {
-                        VStack(alignment: .leading, spacing: 12) {
-                            cardTitle("Ring Buffers", icon: "waveform.path")
-                            meterRow(label: "Mic -> Apps", percent: app.mainRingPercent, color: Theme.purple)
-                            meterRow(label: "Inject Buffer", percent: app.injectRingPercent, color: Theme.accent)
-                        }
-                    }
+                // Left: Audio Controls
+                card {
+                    VStack(alignment: .leading, spacing: 14) {
+                        cardTitle("Audio Controls", icon: "speaker.wave.2.fill")
 
-                    card {
-                        VStack(alignment: .leading, spacing: 10) {
-                            cardTitle("Inject Volume", icon: "speaker.wave.2.fill")
+                        // Inject Volume
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Inject Volume")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(Theme.bodyText)
                             HStack(spacing: 10) {
                                 Image(systemName: app.volume < 0.01 ? "speaker.slash.fill" : "speaker.fill")
                                     .font(.system(size: 11))
@@ -545,11 +561,14 @@ struct ContentView: View {
                                     .frame(width: 36, alignment: .trailing)
                             }
                         }
-                    }
 
-                    card {
-                        VStack(alignment: .leading, spacing: 10) {
-                            cardTitle("Capture Buffer", icon: "clock.fill")
+                        Divider().background(Theme.cardBorder)
+
+                        // Capture Buffer
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Capture Buffer")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(Theme.bodyText)
                             HStack(spacing: 10) {
                                 Text("\(Int(app.dashcamBufferSeconds))s")
                                     .font(.system(size: 12, design: .monospaced))
@@ -564,69 +583,85 @@ struct ContentView: View {
                                 .font(.system(size: 10))
                                 .foregroundColor(Theme.dimText)
                         }
+
+                        Divider().background(Theme.cardBorder)
+
+                        // Ring Buffers
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Ring Buffers")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(Theme.bodyText)
+                            meterRow(label: "Mic → Apps", percent: app.mainRingPercent, color: Theme.purple)
+                            meterRow(label: "Inject Buffer", percent: app.injectRingPercent, color: Theme.accent)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity)
 
-                // Right: System
-                VStack(spacing: 12) {
-                    card {
-                        VStack(alignment: .leading, spacing: 10) {
-                            cardTitle("Health Check", icon: "checkmark.shield.fill")
-                            healthRow("Driver installed", ok: app.driverInstalled)
-                            healthRow("VirtualMic visible", ok: app.virtualMicVisible)
-                            healthRow("Mic shared memory", ok: app.shmAvailable)
-                            healthRow("Speaker shared memory", ok: app.speakerShmAvailable)
-                            healthRow("Microphone permission", ok: app.hasMicPermission)
-                            healthRow("Input devices found", ok: !app.devices.isEmpty)
-                            healthRow("Output devices found", ok: !app.outputDevices.isEmpty)
-                            healthRow("Mic proxy active", ok: app.proxyRunning)
-                            healthRow("Speaker proxy active", ok: app.speakerProxyRunning)
-                        }
-                    }
+                // Right: Health & Driver
+                card {
+                    VStack(alignment: .leading, spacing: 10) {
+                        cardTitle("Health Check", icon: "checkmark.shield.fill")
+                        healthRow("Driver installed", ok: app.driverInstalled)
+                        healthRow("VirtualMic visible", ok: app.virtualMicVisible)
+                        healthRow("Mic shared memory", ok: app.shmAvailable)
+                        healthRow("Speaker shared memory", ok: app.speakerShmAvailable)
+                        healthRow("Microphone permission", ok: app.hasMicPermission)
+                        healthRow("Input devices found", ok: !app.devices.isEmpty)
+                        healthRow("Output devices found", ok: !app.outputDevices.isEmpty)
+                        healthRow("Mic proxy active", ok: app.proxyRunning)
+                        healthRow("Speaker proxy active", ok: app.speakerProxyRunning)
 
-                    card {
-                        VStack(alignment: .leading, spacing: 12) {
-                            cardTitle("Audio Driver", icon: "cpu")
-                            HStack(spacing: 8) {
-                                Circle()
-                                    .fill(app.driverInstalled ? Theme.accent : Color.red)
-                                    .frame(width: 8, height: 8)
-                                Text(app.driverInstalled ? "Driver installed" : "Driver not found")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(Theme.bodyText)
-                                Spacer()
-                                if app.driverInstalled {
-                                    Button { showUninstallConfirm = true } label: {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "trash")
-                                            Text("Uninstall")
-                                        }
-                                        .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(.red)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 6)
-                                        .background(Color.red.opacity(0.1))
-                                        .cornerRadius(6)
-                                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.red.opacity(0.3), lineWidth: 1))
+                        Divider().background(Theme.cardBorder)
+
+                        // Audio Driver
+                        HStack(spacing: 8) {
+                            Image(systemName: "cpu")
+                                .font(.system(size: 10))
+                                .foregroundColor(Theme.purple)
+                            Text("AUDIO DRIVER")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(Theme.dimText)
+                                .tracking(1)
+                        }
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(app.driverInstalled ? Theme.accent : Color.red)
+                                .frame(width: 8, height: 8)
+                            Text(app.driverInstalled ? "Driver installed" : "Driver not found")
+                                .font(.system(size: 12))
+                                .foregroundColor(Theme.bodyText)
+                            Spacer()
+                            if app.driverInstalled {
+                                Button { showUninstallConfirm = true } label: {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "trash")
+                                        Text("Uninstall")
                                     }
-                                    .buttonStyle(.plain)
-                                } else {
-                                    Button { performInstall() } label: {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "arrow.down.circle")
-                                            Text("Install")
-                                        }
-                                        .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(Theme.accent)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 6)
-                                        .background(Theme.accent.opacity(0.12))
-                                        .cornerRadius(6)
-                                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.accent.opacity(0.3), lineWidth: 1))
-                                    }
-                                    .buttonStyle(.plain)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.red)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(Color.red.opacity(0.1))
+                                    .cornerRadius(6)
+                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.red.opacity(0.3), lineWidth: 1))
                                 }
+                                .buttonStyle(.plain)
+                            } else {
+                                Button { performInstall() } label: {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "arrow.down.circle")
+                                        Text("Install")
+                                    }
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(Theme.accent)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(Theme.accent.opacity(0.12))
+                                    .cornerRadius(6)
+                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.accent.opacity(0.3), lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
@@ -634,27 +669,6 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
             }
 
-            // About — full width
-            card {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("VirtualMic")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(Theme.bodyText)
-                        Text("Virtual microphone proxy with audio injection")
-                            .font(.system(size: 11))
-                            .foregroundColor(Theme.dimText)
-                    }
-                    Spacer()
-                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(Theme.dimText)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.white.opacity(0.04))
-                        .cornerRadius(6)
-                }
-            }
         }
     }
 
@@ -762,16 +776,22 @@ struct ContentView: View {
         }
     }
 
-    private func pickSoundsFolder() {
+    private func pickBaseFolder() {
+        pickFolder(message: "Select the base folder for VirtualMic data") {
+            app.setBaseDir($0)
+            showToast("Base folder updated")
+        }
+    }
+
+    private func pickFolder(message: String, onPick: (String) -> Void) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
-        panel.message = "Select the folder containing your sound files"
+        panel.message = message
         if panel.runModal() == .OK, let url = panel.url {
-            app.setSoundsDir(url.path)
-            showToast("Sounds folder updated")
+            onPick(url.path)
         }
     }
 

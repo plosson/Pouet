@@ -10,20 +10,24 @@ import Combine
 
 struct AppConfig: Codable {
     var selectedDevice: String?
-    var soundsDir: String
+    var baseDir: String
     var injectVolume: Float?
     var selectedOutputDevice: String?
     var dashcamBufferSeconds: Double?
 
     static let defaultPath = NSHomeDirectory() + "/.virtualmicapp.json"
-    static let defaultSoundsDir = NSHomeDirectory() + "/VirtualMicSounds"
+    static let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.path
+    static let defaultBaseDir = (documentsDir as NSString).appendingPathComponent("VirtualMic")
+
+    var soundsDir: String { (baseDir as NSString).appendingPathComponent("Sounds") }
+    var snapshotsDir: String { (baseDir as NSString).appendingPathComponent("Recordings") }
 
     static func load() -> AppConfig {
         if let data = try? Data(contentsOf: URL(fileURLWithPath: defaultPath)),
            let config = try? JSONDecoder().decode(AppConfig.self, from: data) {
             return config
         }
-        return AppConfig(selectedDevice: nil, soundsDir: defaultSoundsDir)
+        return AppConfig(selectedDevice: nil, baseDir: defaultBaseDir)
     }
 
     func save() {
@@ -45,7 +49,7 @@ class AppService: ObservableObject {
     @Published var proxyDeviceName: String?
     @Published var devices: [AudioDeviceInfo] = []
     @Published var sounds: [String] = []
-    @Published var soundsDir: String = ""
+    @Published var baseDir: String = ""
     @Published var selectedDevice: String = ""
     @Published var volume: Float = 1.0
     @Published var mainRingPercent = 0
@@ -65,6 +69,9 @@ class AppService: ObservableObject {
     @Published var recentSnapshots: [URL] = []
     @Published var playingSnapshot: URL?
 
+    var soundsDir: String { (baseDir as NSString).appendingPathComponent("Sounds") }
+    var snapshotsDir: String { (baseDir as NSString).appendingPathComponent("Recordings") }
+
     private var config: AppConfig
     private var pollTimer: Timer?
     private var originalInputDeviceID: AudioDeviceID?
@@ -75,13 +82,15 @@ class AppService: ObservableObject {
     init() {
         self.audio = AudioService()
         self.config = AppConfig.load()
-        self.soundsDir = config.soundsDir
+        self.baseDir = config.baseDir
         self.volume = config.injectVolume ?? 1.0
         self.dashcamBufferSeconds = config.dashcamBufferSeconds ?? 5.0
 
-        // Ensure sounds directory exists
+        // Ensure directories exist
         try? FileManager.default.createDirectory(
-            atPath: config.soundsDir, withIntermediateDirectories: true)
+            atPath: soundsDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(
+            atPath: snapshotsDir, withIntermediateDirectories: true)
 
         start()
     }
@@ -269,12 +278,6 @@ class AppService: ObservableObject {
         }
     }
 
-    static let snapshotDir: String = {
-        let dir = (NSHomeDirectory() as NSString).appendingPathComponent("VirtualMicDashcam")
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        return dir
-    }()
-
     func saveDashcamSnapshot() -> (url: URL?, error: String?) {
         Log.info("Saving dashcam snapshot (speakerProxy=\(audio.isSpeakerProxyRunning))")
         guard audio.isSpeakerProxyRunning else {
@@ -285,7 +288,7 @@ class AppService: ObservableObject {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         let filename = "dashcam_\(formatter.string(from: Date())).m4a"
-        let url = URL(fileURLWithPath: (Self.snapshotDir as NSString).appendingPathComponent(filename))
+        let url = URL(fileURLWithPath: (snapshotsDir as NSString).appendingPathComponent(filename))
 
         do {
             try audio.saveDashcamSnapshot(to: url)
@@ -299,13 +302,13 @@ class AppService: ObservableObject {
 
     func refreshSnapshots() {
         let fm = FileManager.default
-        guard let files = try? fm.contentsOfDirectory(atPath: Self.snapshotDir) else {
+        guard let files = try? fm.contentsOfDirectory(atPath: snapshotsDir) else {
             recentSnapshots = []
             return
         }
         let urls = files
             .filter { $0.hasSuffix(".m4a") }
-            .map { URL(fileURLWithPath: (Self.snapshotDir as NSString).appendingPathComponent($0)) }
+            .map { URL(fileURLWithPath: (self.snapshotsDir as NSString).appendingPathComponent($0)) }
             .sorted { u1, u2 in
                 let d1 = (try? fm.attributesOfItem(atPath: u1.path)[.creationDate] as? Date) ?? .distantPast
                 let d2 = (try? fm.attributesOfItem(atPath: u2.path)[.creationDate] as? Date) ?? .distantPast
@@ -389,12 +392,14 @@ class AppService: ObservableObject {
 
     // MARK: - Settings
 
-    func setSoundsDir(_ path: String) {
-        soundsDir = path
-        config.soundsDir = path
+    func setBaseDir(_ path: String) {
+        baseDir = path
+        config.baseDir = path
         config.save()
-        try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(atPath: soundsDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(atPath: snapshotsDir, withIntermediateDirectories: true)
         refreshSounds()
+        refreshSnapshots()
     }
 
     var driverInstalled: Bool {
