@@ -418,16 +418,22 @@ class AppService: ObservableObject {
 
     private func startPolling() {
         pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
             guard let self = self else { return }
-            self.mainRingPercent = self.audio.mainRingFillPercent
-            self.injectRingPercent = self.audio.injectRingFillPercent
-            self.injectAvailableSamples = self.audio.injectRingAvailableSamples
-            self.micPeakLevel = self.audio.micPeakLevel
-            self.injectPeakLevel = self.audio.injectPeakLevel
-            self.speakerPeakLevel = self.audio.speakerPeakLevel
+            let newMainRing = self.audio.mainRingFillPercent
+            let newInjectRing = self.audio.injectRingFillPercent
+            let newInjectSamples = self.audio.injectRingAvailableSamples
+            let newMicPeak = self.audio.micPeakLevel
+            let newInjectPeak = self.audio.injectPeakLevel
+            let newSpeakerPeak = self.audio.speakerPeakLevel
 
-            // Clear playing state when inject buffer drains
+            if newMainRing != self.mainRingPercent { self.mainRingPercent = newMainRing }
+            if newInjectRing != self.injectRingPercent { self.injectRingPercent = newInjectRing }
+            if newInjectSamples != self.injectAvailableSamples { self.injectAvailableSamples = newInjectSamples }
+            if abs(newMicPeak - self.micPeakLevel) > 0.005 { self.micPeakLevel = newMicPeak }
+            if abs(newInjectPeak - self.injectPeakLevel) > 0.005 { self.injectPeakLevel = newInjectPeak }
+            if abs(newSpeakerPeak - self.speakerPeakLevel) > 0.005 { self.speakerPeakLevel = newSpeakerPeak }
+
             if self.currentlyPlaying != nil && self.injectAvailableSamples == 0 {
                 self.currentlyPlaying = nil
             }
