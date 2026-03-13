@@ -1,20 +1,32 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Theme
+// MARK: - Theme (neo-brutalist, inspired by gifhurlant.axel.siteio.me)
 
 private enum Theme {
-    static let bg         = Color(red: 0.06, green: 0.06, blue: 0.14)
-    static let cardBg     = Color(red: 0.08, green: 0.10, blue: 0.20)
-    static let cardBorder = Color(white: 0.2, opacity: 0.3)
-    static let accent     = Color(red: 0.29, green: 0.87, blue: 0.50)
-    static let purple     = Color(red: 0.36, green: 0.42, blue: 0.75)
-    static let dimText    = Color(white: 0.45)
-    static let bodyText   = Color(white: 0.85)
+    // Palette
+    static let bg         = Color(red: 1.0, green: 0.99, blue: 0.96)    // warm cream #FFFDF5
+    static let cardBg     = Color.white
+    static let border     = Color(red: 0.12, green: 0.16, blue: 0.23)   // dark slate #1E293B
+    static let accent     = Color(red: 0.00, green: 0.78, blue: 0.65)   // teal mint
+    static let purple     = Color(red: 0.38, green: 0.36, blue: 0.90)   // indigo
+    static let coral      = Color(red: 1.0, green: 0.45, blue: 0.42)    // warm red/coral
+    static let dimText    = Color(red: 0.40, green: 0.45, blue: 0.53)   // slate-500
+    static let bodyText   = Color(red: 0.12, green: 0.16, blue: 0.23)   // slate-800
+    static let shadow     = Color(red: 0.89, green: 0.91, blue: 0.94)   // slate-200 for hard shadow
 
-    static let dbFloor    = -60.0   // silence threshold in dB
-    static let dbRange    = 60.0    // dynamic range for meters (0dB down to dbFloor)
-    static let silenceThreshold = 0.0001  // linear amplitude below which we show -inf
+    // Audio constants
+    static let dbFloor    = -60.0
+    static let dbRange    = 60.0
+    static let silenceThreshold = 0.0001
+
+    // Hard shadow offset (neo-brutalist signature)
+    static let shadowX: CGFloat = 4
+    static let shadowY: CGFloat = 4
+
+    // Border width
+    static let borderW: CGFloat = 2.5
+    static let cornerR: CGFloat = 20
 }
 
 // MARK: - Main View
@@ -27,14 +39,20 @@ struct ContentView: View {
     @State private var showUninstallConfirm = false
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottom) {
             Theme.bg.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 headerBar
-                Divider().background(Theme.cardBorder)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
+                    .padding(.bottom, 8)
 
+                // Tab bar
                 tabBar
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
+
                 ScrollView {
                     Group {
                         switch selectedTab {
@@ -43,63 +61,27 @@ struct ContentView: View {
                         default: soundsTab
                         }
                     }
-                    .padding(20)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
                 }
 
                 // Signal levels footer
                 if selectedTab == 0 {
-                    Divider().background(Theme.cardBorder)
-                    HStack(spacing: 16) {
-                        levelMeter(label: "Mic Input", level: app.micPeakLevel, color: Theme.purple)
-                        levelMeter(label: "Inject Audio", level: app.injectPeakLevel, color: Theme.accent)
-                        levelMeter(label: "Speaker Output", level: app.speakerPeakLevel, color: Theme.purple)
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .background(Theme.bg)
+                    levelsFooter
                 }
 
                 // Version bar
-                Divider().background(Theme.cardBorder)
-                HStack {
-                    Text("Pouet")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(Theme.bodyText)
-                    Text("·")
-                        .foregroundColor(Theme.dimText)
-                    Text("Virtual microphone proxy with audio injection")
-                        .font(.system(size: 11))
-                        .foregroundColor(Theme.dimText)
-                    Spacer()
-                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(Theme.dimText)
-                }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-                .background(Theme.bg)
+                versionBar
+            }
 
-                // Toast
-                if let msg = toast {
-                    HStack(spacing: 6) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(Theme.accent)
-                            .font(.caption)
-                        Text(msg)
-                            .font(.caption)
-                            .foregroundColor(Theme.bodyText)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 6)
-                    .background(Theme.cardBg)
-                    .cornerRadius(8)
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.cardBorder, lineWidth: 1))
-                    .padding(.bottom, 8)
+            // Toast overlay
+            if let msg = toast {
+                toastView(msg)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
+                    .padding(.bottom, 56)
             }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.light)
         .alert("Uninstall Driver", isPresented: $showUninstallConfirm) {
             Button("Cancel", role: .cancel) {}
             Button("Uninstall", role: .destructive) { performUninstall() }
@@ -111,97 +93,120 @@ struct ContentView: View {
     // MARK: - Header
 
     private var headerBar: some View {
-        HStack(spacing: 8) {
-            // Left: Mic input
-            statusDot(active: app.proxyRunning)
+        HStack(spacing: 12) {
+            // App title
+            HStack(spacing: 8) {
+                Text("Pouet")
+                    .font(.system(size: 22, weight: .heavy))
+                    .foregroundColor(Theme.bodyText)
+                    .tracking(-0.5)
 
-            Menu {
+                // Pill badge
+                Text("AUDIO")
+                    .font(.system(size: 9, weight: .heavy))
+                    .tracking(1.5)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Theme.accent)
+                    .cornerRadius(20)
+            }
+
+            Spacer()
+
+            // Mic selector
+            devicePill(
+                icon: "mic.fill",
+                label: app.selectedDevice.isEmpty ? "Select mic" : app.selectedDevice,
+                active: app.proxyRunning,
+                color: Theme.purple
+            ) {
                 ForEach(app.devices) { dev in
                     Button("\(dev.name) (\(dev.inputChannels) ch)") { app.selectMicDevice(dev.name) }
                 }
-            } label: {
-                headerDropdownLabel(
-                    icon: "mic.fill", placeholder: "Select microphone",
-                    value: app.selectedDevice, color: Theme.purple
-                )
             }
 
-            Spacer()
-
-            // Right: Speaker output
-            Menu {
+            // Speaker selector
+            devicePill(
+                icon: "speaker.wave.2.fill",
+                label: app.selectedOutputDevice.isEmpty ? "Select output" : app.selectedOutputDevice,
+                active: app.speakerProxyRunning,
+                color: Theme.accent
+            ) {
                 ForEach(app.outputDevices) { dev in
                     Button(dev.name) { app.selectOutputDevice(dev.name) }
                 }
-            } label: {
-                headerDropdownLabel(
-                    icon: "speaker.fill", placeholder: "Select output",
-                    value: app.selectedOutputDevice, color: Theme.accent
-                )
             }
-
-            statusDot(active: app.speakerProxyRunning)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
     }
 
-    private func statusDot(active: Bool) -> some View {
-        Circle()
-            .fill(active ? Theme.accent : Color.red.opacity(0.6))
-            .frame(width: 8, height: 8)
-    }
-
-    private func headerDropdownLabel(icon: String, placeholder: String, value: String, color: Color) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.system(size: 10))
-                .foregroundColor(color)
-            Text(value.isEmpty ? placeholder : value)
-                .font(.system(size: 11))
-                .foregroundColor(value.isEmpty ? Theme.dimText : Theme.bodyText)
-                .lineLimit(1)
-            Spacer()
-            Image(systemName: "chevron.up.chevron.down")
-                .font(.system(size: 8))
-                .foregroundColor(Theme.dimText)
+    private func devicePill<Items: View>(
+        icon: String, label: String, active: Bool, color: Color,
+        @ViewBuilder items: () -> Items
+    ) -> some View {
+        Menu {
+            items()
+        } label: {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(active ? Theme.accent : Theme.coral)
+                    .frame(width: 8, height: 8)
+                Image(systemName: icon)
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(color)
+                Text(label)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Theme.bodyText)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundColor(Theme.dimText)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(Theme.cardBg)
+            .cornerRadius(14)
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Theme.border, lineWidth: 2)
+            )
+            .shadow(color: Theme.shadow, radius: 0, x: 2, y: 2)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(Color.white.opacity(0.04))
-        .cornerRadius(6)
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.cardBorder, lineWidth: 1))
     }
 
     // MARK: - Tab Bar
 
     private var tabBar: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 8) {
             tabButton("Sounds", icon: "music.note.list", index: 0)
             tabButton("Settings", icon: "gearshape.fill", index: 1)
+            Spacer()
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
     }
 
     private func tabButton(_ title: String, icon: String, index: Int) -> some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.15)) { selectedTab = index }
+        let selected = selectedTab == index
+        return Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { selectedTab = index }
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.system(size: 11))
+                    .font(.system(size: 12, weight: .bold))
                 Text(title)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 13, weight: .bold))
             }
-            .foregroundColor(selectedTab == index ? Theme.accent : Theme.dimText)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
+            .foregroundColor(selected ? .white : Theme.bodyText)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 9)
             .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(selectedTab == index ? Theme.accent.opacity(0.12) : Color.clear)
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(selected ? Theme.border : Theme.cardBg)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Theme.border, lineWidth: selected ? 0 : 2)
+            )
+            .shadow(color: selected ? .clear : Theme.shadow, radius: 0, x: 2, y: 2)
         }
         .buttonStyle(.plain)
     }
@@ -212,82 +217,53 @@ struct ContentView: View {
         VStack(spacing: 16) {
             // INJECT section
             card {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 8) {
-                        cardTitle("Inject", icon: "music.note.list")
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 10) {
+                        sectionTitle("Inject", icon: "music.note.list")
 
                         Spacer()
 
-                        Button {
+                        pillButton("Refresh", icon: "arrow.clockwise", color: Theme.accent) {
                             app.refreshSounds()
                             showToast("Sounds refreshed")
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "arrow.clockwise")
-                                Text("Refresh")
-                            }
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(Theme.accent)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Theme.accent.opacity(0.12))
-                            .cornerRadius(6)
                         }
-                        .buttonStyle(.plain)
 
                         if app.currentlyPlaying != nil {
-                            Button {
+                            pillButton("Stop", icon: "stop.fill", color: Theme.coral) {
                                 app.stopPlayback()
                                 showToast("Stopped")
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "stop.fill")
-                                    Text("Stop")
-                                }
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.red)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(Color.red.opacity(0.12))
-                                .cornerRadius(6)
                             }
-                            .buttonStyle(.plain)
                         }
 
-                        Button {
+                        circleButton(icon: "folder.fill") {
                             if !app.soundsDir.isEmpty {
                                 NSWorkspace.shared.open(URL(fileURLWithPath: app.soundsDir))
                             }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "folder.fill")
-                                Text("Open Folder")
-                            }
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(Theme.dimText)
                         }
-                        .buttonStyle(.plain)
                     }
 
                     if app.sounds.isEmpty {
                         HStack {
                             Spacer()
-                            VStack(spacing: 8) {
+                            VStack(spacing: 10) {
                                 Image(systemName: "music.note")
-                                    .font(.system(size: 20, weight: .light))
-                                    .foregroundColor(Theme.dimText)
-                                Text("No sounds yet — drop audio files in your sounds folder")
-                                    .font(.system(size: 11))
+                                    .font(.system(size: 28, weight: .bold))
+                                    .foregroundColor(Theme.dimText.opacity(0.4))
+                                Text("No sounds yet")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundColor(Theme.bodyText)
+                                Text("Drop audio files in your sounds folder")
+                                    .font(.system(size: 12))
                                     .foregroundColor(Theme.dimText)
                             }
-                            .padding(.vertical, 12)
+                            .padding(.vertical, 20)
                             Spacer()
                         }
                     } else {
                         LazyVGrid(columns: [
-                            GridItem(.flexible(), spacing: 10),
-                            GridItem(.flexible(), spacing: 10)
-                        ], spacing: 10) {
+                            GridItem(.flexible(), spacing: 12),
+                            GridItem(.flexible(), spacing: 12)
+                        ], spacing: 12) {
                             ForEach(app.sounds, id: \.self) { name in
                                 soundCard(name: name)
                             }
@@ -298,8 +274,8 @@ struct ContentView: View {
 
             // CAPTURE section
             card {
-                VStack(alignment: .leading, spacing: 12) {
-                    cardTitle("Capture", icon: "record.circle")
+                VStack(alignment: .leading, spacing: 14) {
+                    sectionTitle("Capture", icon: "record.circle")
 
                     Button {
                         let result = app.saveDashcamSnapshot()
@@ -311,21 +287,27 @@ struct ContentView: View {
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "camera.fill")
-                                .font(.system(size: 13))
+                                .font(.system(size: 14, weight: .bold))
                             Text("Save Snapshot (\(Int(app.dashcamBufferSeconds))s)")
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.system(size: 13, weight: .bold))
                         }
-                        .foregroundColor(app.speakerProxyRunning ? Theme.bg : Theme.dimText)
+                        .foregroundColor(app.speakerProxyRunning ? .white : Theme.dimText)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(app.speakerProxyRunning ? Theme.accent : Color.white.opacity(0.05))
-                        .cornerRadius(8)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(app.speakerProxyRunning ? Theme.accent : Color.black.opacity(0.05))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(app.speakerProxyRunning ? Theme.border : Color.clear, lineWidth: Theme.borderW)
+                        )
                     }
                     .buttonStyle(.plain)
                     .disabled(!app.speakerProxyRunning)
 
                     if !app.recentSnapshots.isEmpty {
-                        VStack(spacing: 6) {
+                        VStack(spacing: 8) {
                             ForEach(app.recentSnapshots, id: \.absoluteString) { url in
                                 snapshotRow(url: url)
                             }
@@ -350,27 +332,32 @@ struct ContentView: View {
             }
         } label: {
             HStack(spacing: 10) {
+                // Icon block
                 ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(isPlaying ? Theme.accent.opacity(0.2) : Theme.purple.opacity(0.15))
-                        .frame(width: 36, height: 36)
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(isPlaying ? Theme.accent.opacity(0.15) : Theme.purple.opacity(0.1))
+                        .frame(width: 40, height: 40)
                     Image(systemName: isPlaying ? "waveform" : "music.note")
-                        .font(.system(size: 14))
+                        .font(.system(size: 16, weight: .bold))
                         .foregroundColor(isPlaying ? Theme.accent : Theme.purple)
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(displayName)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 13, weight: .bold))
                         .foregroundColor(Theme.bodyText)
                         .lineLimit(1)
                     HStack(spacing: 6) {
                         Text(ext)
-                            .font(.system(size: 9, weight: .semibold))
+                            .font(.system(size: 9, weight: .heavy))
                             .foregroundColor(Theme.dimText)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Theme.bg)
+                            .cornerRadius(4)
                         if let dur = app.soundDurations[name] {
                             Text(formatDuration(dur))
-                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
                                 .foregroundColor(Theme.dimText)
                         }
                     }
@@ -378,19 +365,27 @@ struct ContentView: View {
 
                 Spacer()
 
-                Image(systemName: isPlaying ? "stop.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 20))
-                    .foregroundColor(isPlaying ? Theme.accent : Theme.purple.opacity(0.6))
+                // Play/stop circle button
+                ZStack {
+                    Circle()
+                        .fill(isPlaying ? Theme.accent : Theme.border)
+                        .frame(width: 32, height: 32)
+                    Image(systemName: isPlaying ? "stop.fill" : "play.fill")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.white)
+                }
             }
-            .padding(10)
+            .padding(12)
             .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(isPlaying ? Theme.accent.opacity(0.06) : Theme.cardBg)
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Theme.cardBg)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(isPlaying ? Theme.accent.opacity(0.3) : Theme.cardBorder, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(isPlaying ? Theme.accent : Theme.border, lineWidth: Theme.borderW)
             )
+            .shadow(color: isPlaying ? Theme.accent.opacity(0.15) : Color.black.opacity(0.06),
+                    radius: 4, x: 0, y: 2)
         }
         .buttonStyle(.plain)
     }
@@ -401,145 +396,122 @@ struct ContentView: View {
 
         return HStack(spacing: 10) {
             ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isPlaying ? Theme.accent.opacity(0.2) : Theme.purple.opacity(0.15))
-                    .frame(width: 32, height: 32)
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isPlaying ? Theme.accent.opacity(0.15) : Theme.purple.opacity(0.1))
+                    .frame(width: 34, height: 34)
                 Image(systemName: isPlaying ? "waveform" : "record.circle")
-                    .font(.system(size: 13))
+                    .font(.system(size: 13, weight: .bold))
                     .foregroundColor(isPlaying ? Theme.accent : Theme.purple)
             }
 
             Text(displayName)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 12, weight: .bold))
                 .foregroundColor(Theme.bodyText)
                 .lineLimit(1)
 
             Spacer()
 
-            Button {
+            circleButton(icon: "folder") {
                 NSWorkspace.shared.activateFileViewerSelecting([url])
-            } label: {
-                Image(systemName: "folder")
-                    .font(.system(size: 11))
-                    .foregroundColor(Theme.dimText)
-                    .frame(width: 26, height: 26)
-                    .background(Color.white.opacity(0.04))
-                    .cornerRadius(6)
             }
-            .buttonStyle(.plain)
-            .help("Show in Finder")
 
-            Button {
-                if isPlaying {
-                    app.stopSnapshotPlayback()
-                } else {
-                    app.playSnapshot(url: url)
-                }
-            } label: {
-                Image(systemName: isPlaying ? "stop.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 20))
-                    .foregroundColor(isPlaying ? Theme.accent : Theme.purple.opacity(0.6))
+            ZStack {
+                Circle()
+                    .fill(isPlaying ? Theme.accent : Theme.border)
+                    .frame(width: 28, height: 28)
+                Image(systemName: isPlaying ? "stop.fill" : "play.fill")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.white)
             }
-            .buttonStyle(.plain)
+            .onTapGesture {
+                if isPlaying { app.stopSnapshotPlayback() }
+                else { app.playSnapshot(url: url) }
+            }
         }
-        .padding(8)
+        .padding(10)
         .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(isPlaying ? Theme.accent.opacity(0.06) : Color.white.opacity(0.02))
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Theme.cardBg)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(isPlaying ? Theme.accent.opacity(0.3) : Theme.cardBorder, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(isPlaying ? Theme.accent : Theme.border.opacity(0.3), lineWidth: isPlaying ? Theme.borderW : 1.5)
         )
     }
 
     // MARK: - Settings Tab
 
     private var settingsTab: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
             // Base folder
             card {
                 VStack(alignment: .leading, spacing: 10) {
-                    cardTitle("Base Folder", icon: "folder.fill")
-                    HStack(spacing: 6) {
+                    sectionTitle("Base Folder", icon: "folder.fill")
+                    HStack(spacing: 8) {
                         Text(app.baseDir)
-                            .font(.system(size: 11))
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundColor(Theme.bodyText)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.white.opacity(0.04))
-                            .cornerRadius(6)
-                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.cardBorder, lineWidth: 1))
+                            .background(Theme.bg)
+                            .cornerRadius(10)
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border.opacity(0.3), lineWidth: 1.5))
 
-                        Button(action: pickBaseFolder) {
-                            Text("Browse")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(Theme.accent)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
-                                .background(Theme.accent.opacity(0.12))
-                                .cornerRadius(6)
+                        pillButton("Browse", icon: nil, color: Theme.accent) {
+                            pickBaseFolder()
                         }
-                        .buttonStyle(.plain)
 
-                        Button { NSWorkspace.shared.open(URL(fileURLWithPath: app.baseDir)) } label: {
-                            Image(systemName: "arrow.up.forward.square")
-                                .font(.system(size: 11))
-                                .foregroundColor(Theme.dimText)
-                                .frame(width: 26, height: 26)
-                                .background(Color.white.opacity(0.04))
-                                .cornerRadius(6)
+                        circleButton(icon: "arrow.up.forward.square") {
+                            NSWorkspace.shared.open(URL(fileURLWithPath: app.baseDir))
                         }
-                        .buttonStyle(.plain)
-                        .help("Open in Finder")
                     }
                     Text("Sounds stored in /Sounds, recordings in /Recordings")
-                        .font(.system(size: 10))
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundColor(Theme.dimText)
                 }
             }
 
-            // Two columns: Controls (left) | Status (right)
-            HStack(alignment: .top, spacing: 12) {
+            // Two columns
+            HStack(alignment: .top, spacing: 14) {
                 // Left: Audio Controls
                 card {
                     VStack(alignment: .leading, spacing: 14) {
-                        cardTitle("Audio Controls", icon: "speaker.wave.2.fill")
+                        sectionTitle("Audio Controls", icon: "speaker.wave.2.fill")
 
                         // Inject Volume
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 6) {
                             Text("Inject Volume")
-                                .font(.system(size: 11, weight: .medium))
+                                .font(.system(size: 12, weight: .bold))
                                 .foregroundColor(Theme.bodyText)
                             HStack(spacing: 10) {
                                 Image(systemName: app.volume < 0.01 ? "speaker.slash.fill" : "speaker.fill")
-                                    .font(.system(size: 11))
+                                    .font(.system(size: 12, weight: .bold))
                                     .foregroundColor(Theme.dimText)
-                                    .frame(width: 16)
+                                    .frame(width: 18)
                                 Slider(value: $app.volume, in: 0...1, step: 0.01) { editing in
                                     if !editing { app.setVolume(app.volume) }
                                 }
                                 .tint(Theme.accent)
                                 Text("\(Int(app.volume * 100))%")
-                                    .font(.system(size: 12, design: .monospaced))
+                                    .font(.system(size: 13, weight: .heavy, design: .monospaced))
                                     .foregroundColor(Theme.bodyText)
-                                    .frame(width: 36, alignment: .trailing)
+                                    .frame(width: 40, alignment: .trailing)
                             }
                         }
 
-                        Divider().background(Theme.cardBorder)
+                        separator
 
                         // Capture Buffer
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 6) {
                             Text("Capture Buffer")
-                                .font(.system(size: 11, weight: .medium))
+                                .font(.system(size: 12, weight: .bold))
                                 .foregroundColor(Theme.bodyText)
                             HStack(spacing: 10) {
                                 Text("\(Int(app.dashcamBufferSeconds))s")
-                                    .font(.system(size: 12, design: .monospaced))
+                                    .font(.system(size: 13, weight: .heavy, design: .monospaced))
                                     .foregroundColor(Theme.bodyText)
                                     .frame(width: 30, alignment: .trailing)
                                 Slider(value: $app.dashcamBufferSeconds, in: 1...30, step: 1) { editing in
@@ -547,17 +519,17 @@ struct ContentView: View {
                                 }
                                 .tint(Theme.accent)
                             }
-                            Text("Rolling buffer duration for capture snapshots.")
-                                .font(.system(size: 10))
+                            Text("Rolling buffer for capture snapshots")
+                                .font(.system(size: 10, weight: .medium))
                                 .foregroundColor(Theme.dimText)
                         }
 
-                        Divider().background(Theme.cardBorder)
+                        separator
 
                         // Ring Buffers
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Ring Buffers")
-                                .font(.system(size: 11, weight: .medium))
+                                .font(.system(size: 12, weight: .bold))
                                 .foregroundColor(Theme.bodyText)
                             meterRow(label: "Mic → Apps", percent: app.mainRingPercent, color: Theme.purple)
                             meterRow(label: "Inject Buffer", percent: app.injectRingPercent, color: Theme.accent)
@@ -569,7 +541,7 @@ struct ContentView: View {
                 // Right: Health & Driver
                 card {
                     VStack(alignment: .leading, spacing: 10) {
-                        cardTitle("Health Check", icon: "checkmark.shield.fill")
+                        sectionTitle("Health Check", icon: "checkmark.shield.fill")
                         healthRow("Driver installed", ok: app.driverInstalled)
                         healthRow("Pouet visible", ok: app.virtualMicVisible)
                         healthRow("Mic shared memory", ok: app.shmAvailable)
@@ -580,96 +552,160 @@ struct ContentView: View {
                         healthRow("Mic proxy active", ok: app.proxyRunning)
                         healthRow("Speaker proxy active", ok: app.speakerProxyRunning)
 
-                        Divider().background(Theme.cardBorder)
+                        separator
 
-                        // Audio Driver
-                        HStack(spacing: 8) {
-                            Image(systemName: "cpu")
-                                .font(.system(size: 10))
-                                .foregroundColor(Theme.purple)
-                            Text("AUDIO DRIVER")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundColor(Theme.dimText)
-                                .tracking(1)
-                        }
-                        HStack(spacing: 8) {
+                        // Audio Driver section
+                        sectionTitle("Audio Driver", icon: "cpu")
+                        HStack(spacing: 10) {
                             Circle()
-                                .fill(app.driverInstalled ? Theme.accent : Color.red)
-                                .frame(width: 8, height: 8)
+                                .fill(app.driverInstalled ? Theme.accent : Theme.coral)
+                                .frame(width: 10, height: 10)
+                                .overlay(
+                                    Circle().stroke(Theme.border, lineWidth: 1.5)
+                                )
                             Text(app.driverInstalled ? "Driver installed" : "Driver not found")
-                                .font(.system(size: 12))
+                                .font(.system(size: 13, weight: .bold))
                                 .foregroundColor(Theme.bodyText)
                             Spacer()
                             if app.driverInstalled {
-                                Button { showUninstallConfirm = true } label: {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "trash")
-                                        Text("Uninstall")
-                                    }
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(.red)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(Color.red.opacity(0.1))
-                                    .cornerRadius(6)
-                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.red.opacity(0.3), lineWidth: 1))
+                                pillButton("Uninstall", icon: "trash", color: Theme.coral) {
+                                    showUninstallConfirm = true
                                 }
-                                .buttonStyle(.plain)
                             } else {
-                                Button { performInstall() } label: {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "arrow.down.circle")
-                                        Text("Install")
-                                    }
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(Theme.accent)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(Theme.accent.opacity(0.12))
-                                    .cornerRadius(6)
-                                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.accent.opacity(0.3), lineWidth: 1))
+                                pillButton("Install", icon: "arrow.down.circle", color: Theme.accent) {
+                                    performInstall()
                                 }
-                                .buttonStyle(.plain)
                             }
                         }
                     }
                 }
                 .frame(maxWidth: .infinity)
             }
-
         }
     }
 
-    // MARK: - Card Components
+    // MARK: - Levels Footer
+
+    private var levelsFooter: some View {
+        VStack(spacing: 0) {
+            Rectangle().fill(Theme.border.opacity(0.1)).frame(height: 1)
+            HStack(spacing: 16) {
+                levelMeter(label: "Mic Input", level: app.micPeakLevel, color: Theme.purple)
+                levelMeter(label: "Inject Audio", level: app.injectPeakLevel, color: Theme.accent)
+                levelMeter(label: "Speaker Output", level: app.speakerPeakLevel, color: Theme.purple)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(Theme.cardBg)
+        }
+    }
+
+    // MARK: - Version Bar
+
+    private var versionBar: some View {
+        HStack {
+            Text("Pouet")
+                .font(.system(size: 11, weight: .heavy))
+                .foregroundColor(Theme.bodyText)
+            Text("·")
+                .foregroundColor(Theme.dimText)
+            Text("Virtual microphone proxy with audio injection")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(Theme.dimText)
+            Spacer()
+            Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundColor(Theme.dimText)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 8)
+        .background(Theme.cardBg)
+    }
+
+    // MARK: - Reusable Components
 
     private func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading) { content() }
-            .padding(14)
+            .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Theme.cardBg)
-            .cornerRadius(12)
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.cardBorder, lineWidth: 1))
+            .cornerRadius(Theme.cornerR)
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.cornerR)
+                    .stroke(Theme.border, lineWidth: Theme.borderW)
+            )
+            .shadow(color: Theme.shadow, radius: 0, x: Theme.shadowX, y: Theme.shadowY)
     }
 
-    private func cardTitle(_ title: String, icon: String) -> some View {
-        HStack(spacing: 6) {
+    private func sectionTitle(_ title: String, icon: String) -> some View {
+        HStack(spacing: 8) {
             Image(systemName: icon)
-                .font(.system(size: 10))
+                .font(.system(size: 12, weight: .bold))
                 .foregroundColor(Theme.purple)
-            Text(title.uppercased())
-                .font(.system(size: 10, weight: .bold))
-                .foregroundColor(Theme.dimText)
-                .tracking(1)
+            Text(title)
+                .font(.system(size: 15, weight: .heavy))
+                .foregroundColor(Theme.bodyText)
+                .tracking(-0.3)
         }
+    }
+
+    private func pillButton(_ label: String, icon: String?, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                if let icon = icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 10, weight: .bold))
+                }
+                Text(label)
+                    .font(.system(size: 11, weight: .bold))
+            }
+            .foregroundColor(color)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(color.opacity(0.12))
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(color.opacity(0.3), lineWidth: 1.5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func circleButton(icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(Theme.dimText)
+                .frame(width: 30, height: 30)
+                .background(Theme.bg)
+                .cornerRadius(15)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 15)
+                        .stroke(Theme.border.opacity(0.2), lineWidth: 1.5)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var separator: some View {
+        Rectangle()
+            .fill(Theme.border.opacity(0.1))
+            .frame(height: 1.5)
     }
 
     private func healthRow(_ label: String, ok: Bool) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .font(.system(size: 12))
-                .foregroundColor(ok ? Theme.accent : Color.red.opacity(0.8))
+            ZStack {
+                Circle()
+                    .fill(ok ? Theme.accent.opacity(0.15) : Theme.coral.opacity(0.15))
+                    .frame(width: 22, height: 22)
+                Image(systemName: ok ? "checkmark" : "xmark")
+                    .font(.system(size: 10, weight: .heavy))
+                    .foregroundColor(ok ? Theme.accent : Theme.coral)
+            }
             Text(label)
-                .font(.system(size: 12))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(Theme.bodyText)
             Spacer()
         }
@@ -683,27 +719,29 @@ struct ContentView: View {
         return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(label)
-                    .font(.system(size: 11))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(Theme.dimText)
                 Spacer()
                 Text(dbText)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundColor(Theme.bodyText)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.white.opacity(0.05))
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(LinearGradient(
-                            colors: [color.opacity(0.7), normalized > 0.85 ? .red : color],
-                            startPoint: .leading, endPoint: .trailing
-                        ))
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Theme.border.opacity(0.08))
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(normalized > 0.85 ? Theme.coral : color)
                         .frame(width: geo.size.width * normalized)
                         .animation(.easeOut(duration: 0.08), value: normalized)
                 }
             }
-            .frame(height: 6)
+            .frame(height: 8)
+            .cornerRadius(4)
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(Theme.border.opacity(0.15), lineWidth: 1)
+            )
         }
     }
 
@@ -711,28 +749,50 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(label)
-                    .font(.system(size: 11))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(Theme.dimText)
                 Spacer()
                 Text("\(percent)%")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundColor(Theme.bodyText)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.white.opacity(0.05))
+                        .fill(Theme.border.opacity(0.08))
                     RoundedRectangle(cornerRadius: 3)
-                        .fill(LinearGradient(
-                            colors: [color.opacity(0.7), color],
-                            startPoint: .leading, endPoint: .trailing
-                        ))
+                        .fill(color)
                         .frame(width: geo.size.width * CGFloat(percent) / 100)
                         .animation(.easeOut(duration: 0.3), value: percent)
                 }
             }
-            .frame(height: 4)
+            .frame(height: 6)
+            .cornerRadius(3)
+            .overlay(
+                RoundedRectangle(cornerRadius: 3)
+                    .stroke(Theme.border.opacity(0.15), lineWidth: 1)
+            )
         }
+    }
+
+    private func toastView(_ msg: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(Theme.accent)
+                .font(.system(size: 14, weight: .bold))
+            Text(msg)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(Theme.bodyText)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Theme.cardBg)
+        .cornerRadius(14)
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Theme.border, lineWidth: 2)
+        )
+        .shadow(color: Theme.shadow, radius: 0, x: 3, y: 3)
     }
 
     // MARK: - Helpers
@@ -803,7 +863,6 @@ struct ContentView: View {
     }
 
     private func performUninstall() {
-        // Shutdown proxies first so the app doesn't crash when the driver disappears
         app.shutdown()
 
         let script = """
@@ -817,7 +876,6 @@ struct ContentView: View {
                 DispatchQueue.main.async {
                     if error == nil {
                         showToast("Driver uninstalled — Core Audio restarted")
-                        // Refresh device list since Pouet is now gone
                         app.loadDevices()
                     } else {
                         showToast("Uninstall cancelled or failed")
