@@ -13,13 +13,15 @@ make uninstall
 
 ## Release
 
-Push a version tag to trigger CI:
+1. Update version in `MacApp/Info.plist` (both `CFBundleShortVersionString` and `CFBundleVersion`)
+2. Commit the version bump
+3. Tag and push:
 
 ```bash
-git tag v1.x.x && git push --tags
+git tag v1.x.x && git push origin main --tags
 ```
 
-CI (.github/workflows/build.yml) will: build → sign → notarize → create GitHub Release.
+CI (.github/workflows/build.yml) will automatically: build → sign → notarize → create GitHub Release with the `.pkg` installer.
 
 ## Code guidelines
 
