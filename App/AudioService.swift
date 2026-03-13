@@ -661,38 +661,36 @@ class AudioService {
 
     // MARK: - Devices
 
-    func listDevices() -> [AudioDeviceInfo] {
+    private func listDevicesInternal(scope: AudioObjectPropertyScope, excludeUIDs: [String]) -> [AudioDeviceInfo] {
         var propAddr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
         var dataSize: UInt32 = 0
-        var status = AudioObjectGetPropertyDataSize(
-            AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize)
-        guard status == noErr else { return [] }
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize) == noErr else { return [] }
 
         let deviceCount = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
         var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
-        status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize, &deviceIDs)
-        guard status == noErr else { return [] }
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize, &deviceIDs) == noErr else { return [] }
 
         var result: [AudioDeviceInfo] = []
         for devID in deviceIDs {
-            var inputAddr = AudioObjectPropertyAddress(
+            var streamAddr = AudioObjectPropertyAddress(
                 mSelector: kAudioDevicePropertyStreamConfiguration,
-                mScope: kAudioDevicePropertyScopeInput,
+                mScope: scope,
                 mElement: kAudioObjectPropertyElementMain
             )
             var bufSize: UInt32 = 0
-            guard AudioObjectGetPropertyDataSize(devID, &inputAddr, 0, nil, &bufSize) == noErr,
+            guard AudioObjectGetPropertyDataSize(devID, &streamAddr, 0, nil, &bufSize) == noErr,
                   bufSize > 0 else { continue }
 
             let bufListPtr = UnsafeMutablePointer<AudioBufferList>.allocate(
                 capacity: Int(bufSize) / MemoryLayout<AudioBufferList>.size + 1)
             defer { bufListPtr.deallocate() }
-            guard AudioObjectGetPropertyData(devID, &inputAddr, 0, nil, &bufSize, bufListPtr) == noErr else { continue }
+            guard AudioObjectGetPropertyData(devID, &streamAddr, 0, nil, &bufSize, bufListPtr) == noErr else { continue }
 
             let bufList = UnsafeMutableAudioBufferListPointer(bufListPtr)
             var totalChannels = 0
@@ -701,19 +699,25 @@ class AudioService {
 
             let name = getAudioDeviceStringProperty(devID, selector: kAudioObjectPropertyName) ?? ""
             let uid = getAudioDeviceStringProperty(devID, selector: kAudioDevicePropertyDeviceUID) ?? ""
-            if uid.contains("VirtualMic") { continue }
+            if excludeUIDs.contains(where: { uid.contains($0) }) { continue }
 
             result.append(AudioDeviceInfo(id: devID, name: name, uid: uid, inputChannels: totalChannels))
         }
         return result
     }
 
+    func listDevices() -> [AudioDeviceInfo] {
+        listDevicesInternal(scope: kAudioDevicePropertyScopeInput, excludeUIDs: ["VirtualMic"])
+    }
+
+    private func findDeviceIn(_ devices: [AudioDeviceInfo], matching query: String) -> AudioDeviceInfo? {
+        let q = query.lowercased()
+        return devices.first(where: { $0.name.lowercased() == q })
+            ?? devices.first(where: { $0.name.lowercased().contains(q) })
+    }
+
     func findDevice(matching query: String) -> AudioDeviceInfo? {
-        let devices = listDevices()
-        if let exact = devices.first(where: { $0.name.lowercased() == query.lowercased() }) {
-            return exact
-        }
-        return devices.first(where: { $0.name.lowercased().contains(query.lowercased()) })
+        findDeviceIn(listDevices(), matching: query)
     }
 
     // MARK: - Proxy
@@ -755,49 +759,7 @@ class AudioService {
     var isSpeakerProxyRunning: Bool { speakerProxy != nil }
 
     func listOutputDevices() -> [AudioDeviceInfo] {
-        var propAddr = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDevices,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var dataSize: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(
-            AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize) == noErr else { return [] }
-
-        let deviceCount = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
-        var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
-        guard AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize, &deviceIDs) == noErr else { return [] }
-
-        var result: [AudioDeviceInfo] = []
-        for devID in deviceIDs {
-            var outputAddr = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyStreamConfiguration,
-                mScope: kAudioDevicePropertyScopeOutput,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            var bufSize: UInt32 = 0
-            guard AudioObjectGetPropertyDataSize(devID, &outputAddr, 0, nil, &bufSize) == noErr,
-                  bufSize > 0 else { continue }
-
-            let bufListPtr = UnsafeMutablePointer<AudioBufferList>.allocate(
-                capacity: Int(bufSize) / MemoryLayout<AudioBufferList>.size + 1)
-            defer { bufListPtr.deallocate() }
-            guard AudioObjectGetPropertyData(devID, &outputAddr, 0, nil, &bufSize, bufListPtr) == noErr else { continue }
-
-            let bufList = UnsafeMutableAudioBufferListPointer(bufListPtr)
-            var totalChannels = 0
-            for buf in bufList { totalChannels += Int(buf.mNumberChannels) }
-            if totalChannels == 0 { continue }
-
-            let name = getAudioDeviceStringProperty(devID, selector: kAudioObjectPropertyName) ?? ""
-            let uid = getAudioDeviceStringProperty(devID, selector: kAudioDevicePropertyDeviceUID) ?? ""
-            // Exclude our own virtual devices
-            if uid.contains("VirtualMic") || uid.contains("VirtualSpeaker") { continue }
-
-            result.append(AudioDeviceInfo(id: devID, name: name, uid: uid, inputChannels: totalChannels))
-        }
-        return result
+        listDevicesInternal(scope: kAudioDevicePropertyScopeOutput, excludeUIDs: ["VirtualMic", "VirtualSpeaker"])
     }
 
     func defaultDevice(input: Bool) -> AudioDeviceInfo? {
@@ -809,11 +771,7 @@ class AudioService {
     }
 
     func findOutputDevice(matching query: String) -> AudioDeviceInfo? {
-        let devices = listOutputDevices()
-        if let exact = devices.first(where: { $0.name.lowercased() == query.lowercased() }) {
-            return exact
-        }
-        return devices.first(where: { $0.name.lowercased().contains(query.lowercased()) })
+        findDeviceIn(listOutputDevices(), matching: query)
     }
 
     func startSpeakerProxy(deviceID: AudioDeviceID, deviceName: String, bufferDuration: Double = 5.0) throws {

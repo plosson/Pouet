@@ -58,19 +58,12 @@ _Static_assert(offsetof(VirtualMicSHM, capacity) == 128, "capacity offset mismat
 // VirtualMic (input device)
 #define kMicDeviceID            2
 #define kMicInputStreamID       3
-#define kMicOutputStreamID      4   // unused loopback
 #define kMicVolumeCtrlID        5
 
 // VirtualSpeaker (output device)
 #define kSpkDeviceID            6
 #define kSpkOutputStreamID      7
 #define kSpkVolumeCtrlID        8
-
-// Backward compat aliases
-#define kDeviceObjectID     kMicDeviceID
-#define kInputStreamID      kMicInputStreamID
-#define kOutputStreamID     kMicOutputStreamID
-#define kMasterVolumeCtrlID kMicVolumeCtrlID
 
 // ---------------------------------------------------------------------------
 // Device configuration (data-driven to avoid massive duplication)
