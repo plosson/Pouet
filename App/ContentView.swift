@@ -228,9 +228,9 @@ struct ContentView: View {
                             showToast("Sounds refreshed")
                         }
 
-                        if app.currentlyPlaying != nil {
+                        if app.injectingURL != nil {
                             pillButton("Stop", icon: "stop.fill", color: Theme.coral) {
-                                app.stopPlayback()
+                                app.stopInjection()
                                 showToast("Stopped")
                             }
                         }
@@ -319,89 +319,87 @@ struct ContentView: View {
     }
 
     private func soundCard(name: String) -> some View {
-        let isPlaying = app.currentlyPlaying == name
+        let url = URL(fileURLWithPath: (app.soundsDir as NSString).appendingPathComponent(name))
+        let isInjecting = app.injectingURL == url
+        let isPreviewing = app.previewingURL == url
+        let isActive = isInjecting || isPreviewing
         let ext = (name as NSString).pathExtension.uppercased()
         let displayName = (name as NSString).deletingPathExtension
 
-        return Button {
-            if isPlaying {
-                app.stopPlayback()
-            } else {
-                app.playSound(name: name)
-                showToast("Playing: \(displayName)")
+        return HStack(spacing: 10) {
+            // Icon block
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isActive ? Theme.accent.opacity(0.15) : Theme.purple.opacity(0.1))
+                    .frame(width: 40, height: 40)
+                Image(systemName: isActive ? "waveform" : "music.note")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(isActive ? Theme.accent : Theme.purple)
             }
-        } label: {
-            HStack(spacing: 10) {
-                // Icon block
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(isPlaying ? Theme.accent.opacity(0.15) : Theme.purple.opacity(0.1))
-                        .frame(width: 40, height: 40)
-                    Image(systemName: isPlaying ? "waveform" : "music.note")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(isPlaying ? Theme.accent : Theme.purple)
-                }
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(displayName)
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundColor(Theme.bodyText)
-                        .lineLimit(1)
-                    HStack(spacing: 6) {
-                        Text(ext)
-                            .font(.system(size: 9, weight: .heavy))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(displayName)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(Theme.bodyText)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(ext)
+                        .font(.system(size: 9, weight: .heavy))
+                        .foregroundColor(Theme.dimText)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Theme.bg)
+                        .cornerRadius(4)
+                    if let dur = app.soundDurations[name] {
+                        Text(formatDuration(dur))
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
                             .foregroundColor(Theme.dimText)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Theme.bg)
-                            .cornerRadius(4)
-                        if let dur = app.soundDurations[name] {
-                            Text(formatDuration(dur))
-                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                                .foregroundColor(Theme.dimText)
-                        }
                     }
                 }
+            }
 
-                Spacer()
+            Spacer()
 
-                // Play/stop circle button
-                ZStack {
-                    Circle()
-                        .fill(isPlaying ? Theme.accent : Theme.border)
-                        .frame(width: 32, height: 32)
-                    Image(systemName: isPlaying ? "stop.fill" : "play.fill")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.white)
+            playbackButton(active: isPreviewing, icon: "headphones", size: 32, help: "Play for me only") {
+                if isPreviewing { app.stopPreview() }
+                else { app.preview(url: url) }
+            }
+
+            playbackButton(active: isInjecting, icon: "mic.fill", size: 32, help: "Play for everyone") {
+                if isInjecting { app.stopInjection() }
+                else {
+                    app.inject(url: url)
+                    showToast("Injecting: \(displayName)")
                 }
             }
-            .padding(12)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Theme.cardBg)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(isPlaying ? Theme.accent : Theme.border, lineWidth: Theme.borderW)
-            )
-            .shadow(color: isPlaying ? Theme.accent.opacity(0.15) : Color.black.opacity(0.06),
-                    radius: 4, x: 0, y: 2)
         }
-        .buttonStyle(.plain)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Theme.cardBg)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(isActive ? Theme.accent : Theme.border, lineWidth: Theme.borderW)
+        )
+        .shadow(color: isActive ? Theme.accent.opacity(0.15) : Color.black.opacity(0.06),
+                radius: 4, x: 0, y: 2)
     }
 
     private func snapshotRow(url: URL) -> some View {
-        let isPlaying = app.playingSnapshot == url
+        let isPreviewing = app.previewingURL == url
+        let isInjecting = app.injectingURL == url
+        let isActive = isPreviewing || isInjecting
         let displayName = (url.lastPathComponent as NSString).deletingPathExtension
 
         return HStack(spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(isPlaying ? Theme.accent.opacity(0.15) : Theme.purple.opacity(0.1))
+                    .fill(isActive ? Theme.accent.opacity(0.15) : Theme.purple.opacity(0.1))
                     .frame(width: 34, height: 34)
-                Image(systemName: isPlaying ? "waveform" : "record.circle")
+                Image(systemName: isActive ? "waveform" : "record.circle")
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundColor(isPlaying ? Theme.accent : Theme.purple)
+                    .foregroundColor(isActive ? Theme.accent : Theme.purple)
             }
 
             Text(displayName)
@@ -415,17 +413,14 @@ struct ContentView: View {
                 NSWorkspace.shared.activateFileViewerSelecting([url])
             }
 
-            ZStack {
-                Circle()
-                    .fill(isPlaying ? Theme.accent : Theme.border)
-                    .frame(width: 28, height: 28)
-                Image(systemName: isPlaying ? "stop.fill" : "play.fill")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(.white)
+            playbackButton(active: isPreviewing, icon: "headphones", size: 28, help: "Play for me only") {
+                if isPreviewing { app.stopPreview() }
+                else { app.preview(url: url) }
             }
-            .onTapGesture {
-                if isPlaying { app.stopSnapshotPlayback() }
-                else { app.playSnapshot(url: url) }
+
+            playbackButton(active: isInjecting, icon: "mic.fill", size: 28, help: "Play for everyone") {
+                if isInjecting { app.stopInjection() }
+                else { app.inject(url: url) }
             }
         }
         .padding(10)
@@ -435,7 +430,7 @@ struct ContentView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14)
-                .stroke(isPlaying ? Theme.accent : Theme.border.opacity(0.3), lineWidth: isPlaying ? Theme.borderW : 1.5)
+                .stroke(isActive ? Theme.accent : Theme.border.opacity(0.3), lineWidth: isActive ? Theme.borderW : 1.5)
         )
     }
 
@@ -688,6 +683,20 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
+    private func playbackButton(active: Bool, icon: String, size: CGFloat, help: String, action: @escaping () -> Void) -> some View {
+        let iconSize = size > 30 ? CGFloat(12) : CGFloat(10)
+        return ZStack {
+            Circle()
+                .fill(active ? Theme.accent : Theme.border)
+                .frame(width: size, height: size)
+            Image(systemName: active ? "stop.fill" : icon)
+                .font(.system(size: iconSize, weight: .bold))
+                .foregroundColor(.white)
+        }
+        .onTapGesture(perform: action)
+        .help(help)
+    }
+
     private var separator: some View {
         Rectangle()
             .fill(Theme.border.opacity(0.1))
@@ -815,21 +824,15 @@ struct ContentView: View {
     }
 
     private func pickBaseFolder() {
-        pickFolder(message: "Select the base folder for Pouet data") {
-            app.setBaseDir($0)
-            showToast("Base folder updated")
-        }
-    }
-
-    private func pickFolder(message: String, onPick: (String) -> Void) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
-        panel.message = message
+        panel.message = "Select the base folder for Pouet data"
         if panel.runModal() == .OK, let url = panel.url {
-            onPick(url.path)
+            app.setBaseDir(url.path)
+            showToast("Base folder updated")
         }
     }
 

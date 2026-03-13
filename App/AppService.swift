@@ -58,7 +58,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var mainRingPercent = 0
     @Published var injectRingPercent = 0
     @Published var injectAvailableSamples = 0
-    @Published var currentlyPlaying: String?
+    @Published var injectingURL: URL?
     @Published var micPeakLevel: Float = 0.0
     @Published var injectPeakLevel: Float = 0.0
 
@@ -70,7 +70,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var dashcamBufferSeconds: Double = 5.0
     @Published var speakerPeakLevel: Float = 0.0
     @Published var recentSnapshots: [URL] = []
-    @Published var playingSnapshot: URL?
+    @Published var previewingURL: URL?
 
     var soundsDir: String { (baseDir as NSString).appendingPathComponent("Sounds") }
     var snapshotsDir: String { (baseDir as NSString).appendingPathComponent("Recordings") }
@@ -309,31 +309,33 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         recentSnapshots = Array(urls.prefix(Self.maxRecentSnapshots))
     }
 
-    private var snapshotPlayer: AVAudioPlayer?
+    // MARK: - Preview (local playback via speakers)
 
-    func playSnapshot(url: URL) {
-        stopSnapshotPlayback()
+    private var previewPlayer: AVAudioPlayer?
+
+    func preview(url: URL) {
+        stopPreview()
         do {
-            snapshotPlayer = try AVAudioPlayer(contentsOf: url)
-            snapshotPlayer?.delegate = self
-            snapshotPlayer?.play()
-            playingSnapshot = url
+            previewPlayer = try AVAudioPlayer(contentsOf: url)
+            previewPlayer?.delegate = self
+            previewPlayer?.play()
+            previewingURL = url
         } catch {
-            Log.error("Snapshot playback failed: \(error)")
-            playingSnapshot = nil
+            Log.error("Preview playback failed: \(error)")
+            previewingURL = nil
         }
+    }
+
+    func stopPreview() {
+        previewPlayer?.stop()
+        previewPlayer = nil
+        previewingURL = nil
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         DispatchQueue.main.async { [weak self] in
-            self?.playingSnapshot = nil
+            self?.previewingURL = nil
         }
-    }
-
-    func stopSnapshotPlayback() {
-        snapshotPlayer?.stop()
-        snapshotPlayer = nil
-        playingSnapshot = nil
     }
 
     // MARK: - Volume
@@ -375,23 +377,23 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         soundDurations = durations
     }
 
-    func playSound(name: String) {
-        let path = (config.soundsDir as NSString).appendingPathComponent(name)
-        let url = URL(fileURLWithPath: path)
-        currentlyPlaying = name
+    // MARK: - Inject (virtual mic)
+
+    func inject(url: URL) {
+        injectingURL = url
         audio.injectAudioAsync(url: url) { [weak self] error in
             if let error = error {
                 DispatchQueue.main.async {
-                    self?.currentlyPlaying = nil
-                    Log.error("Play error: \(error)")
+                    self?.injectingURL = nil
+                    Log.error("Inject error: \(error)")
                 }
             }
         }
     }
 
-    func stopPlayback() {
+    func stopInjection() {
         audio.stopInjection()
-        currentlyPlaying = nil
+        injectingURL = nil
     }
 
     // MARK: - Settings
@@ -438,8 +440,8 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
             if abs(newInjectPeak - self.injectPeakLevel) > Self.peakChangeThreshold { self.injectPeakLevel = newInjectPeak }
             if abs(newSpeakerPeak - self.speakerPeakLevel) > Self.peakChangeThreshold { self.speakerPeakLevel = newSpeakerPeak }
 
-            if self.currentlyPlaying != nil && self.injectAvailableSamples == 0 {
-                self.currentlyPlaying = nil
+            if self.injectingURL != nil && self.injectAvailableSamples == 0 {
+                self.injectingURL = nil
             }
 
             // Stop speaker output after idle period
