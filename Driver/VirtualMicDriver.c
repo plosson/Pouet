@@ -102,7 +102,7 @@ static const DeviceDesc kSpkDesc = {
     .streamDirection = 0,
     .terminalType    = kAudioStreamTerminalTypeSpeaker,
     .defaultScope    = kAudioObjectPropertyScopeOutput,
-    .canBeDefaultSystem = true,
+    .canBeDefaultSystem = false,
     .shmName         = VIRTUALSPEAKER_SHM_NAME,
 };
 

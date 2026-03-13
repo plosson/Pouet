@@ -11,9 +11,11 @@ DRIVER="$HAL_DIR/VirtualMic.driver"
 chown -R root:wheel "$DRIVER"
 chmod -R 755 "$DRIVER"
 
-# Restart CoreAudio daemon
+# Gracefully restart CoreAudio daemon.
+# Use launchctl kickstart which lets coreaudiod shut down cleanly
+# and restore the user's device preferences on restart.
 launchctl kickstart -kp system/com.apple.audio.coreaudiod 2>/dev/null || \
-    killall -9 coreaudiod 2>/dev/null || true
+    killall coreaudiod 2>/dev/null || true
 
 echo "VirtualMic driver installed successfully."
 exit 0
