@@ -51,7 +51,7 @@ SWIFTFLAGS    = -target arm64-apple-macos13.0 \
                 -O
 
 # ============================================================
-.PHONY: all driver gui sign pkg install uninstall clean
+.PHONY: all driver gui sign pkg install uninstall clean test test-c test-swift
 
 all: driver gui
 
@@ -159,6 +159,28 @@ uninstall:
 	sudo killall -9 coreaudiod 2>/dev/null || true
 	@sleep 2
 	@echo "✓ Uninstalled. VirtualMic driver removed."
+
+# ---- Tests ----
+test: test-c test-swift
+	@echo "✓ All tests passed"
+
+test-c: Tests/test_driver.c
+	@mkdir -p build
+	clang -O0 -g -Wall -Wextra \
+	    -o build/test_driver \
+	    Tests/test_driver.c -lm -lpthread
+	@echo "--- C driver tests ---"
+	./build/test_driver
+
+test-swift: Tests/test_app.swift App/shm_bridge.h
+	@mkdir -p build
+	$(SWIFTC) $(SWIFTFLAGS) \
+	    -parse-as-library \
+	    -import-objc-header App/shm_bridge.h \
+	    -o build/test_app \
+	    Tests/test_app.swift
+	@echo "--- Swift app tests ---"
+	./build/test_app
 
 clean:
 	rm -rf build .build
