@@ -1,5 +1,5 @@
-// Log.swift — Rotating file logger for VirtualMic
-// Logs to ~/Library/Logs/VirtualMic/ with automatic rotation.
+// Log.swift — Rotating file logger for Pouet
+// Logs to ~/Library/Logs/Pouet/ with automatic rotation.
 
 import Foundation
 
@@ -7,17 +7,17 @@ enum Log {
     private static let maxFileSize: UInt64 = 1_000_000  // 1 MB per file
     private static let maxFiles = 5
     private static let logDir: String = {
-        let dir = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Logs/VirtualMic")
+        let dir = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Logs/Pouet")
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         return dir
     }()
-    private static let logFile: String = (logDir as NSString).appendingPathComponent("virtualmic.log")
+    private static let logFile: String = (logDir as NSString).appendingPathComponent("pouet.log")
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
         return f
     }()
-    private static let queue = DispatchQueue(label: "com.virtualmicdrv.log", qos: .utility)
+    private static let queue = DispatchQueue(label: "com.pouet.log", qos: .utility)
 
     static func info(_ message: String, file: String = #file, line: Int = #line) {
         write("INFO", message, file: file, line: line)

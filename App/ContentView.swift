@@ -62,7 +62,7 @@ struct ContentView: View {
                 // Version bar
                 Divider().background(Theme.cardBorder)
                 HStack {
-                    Text("VirtualMic")
+                    Text("Pouet")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(Theme.bodyText)
                     Text("·")
@@ -104,7 +104,7 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) {}
             Button("Uninstall", role: .destructive) { performUninstall() }
         } message: {
-            Text("This will remove the VirtualMic audio driver and restart Core Audio. The app will remain installed.")
+            Text("This will remove the Pouet audio driver and restart Core Audio. The app will remain installed.")
         }
     }
 
@@ -571,7 +571,7 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         cardTitle("Health Check", icon: "checkmark.shield.fill")
                         healthRow("Driver installed", ok: app.driverInstalled)
-                        healthRow("VirtualMic visible", ok: app.virtualMicVisible)
+                        healthRow("Pouet visible", ok: app.virtualMicVisible)
                         healthRow("Mic shared memory", ok: app.shmAvailable)
                         healthRow("Speaker shared memory", ok: app.speakerShmAvailable)
                         healthRow("Microphone permission", ok: app.hasMicPermission)
@@ -755,7 +755,7 @@ struct ContentView: View {
     }
 
     private func pickBaseFolder() {
-        pickFolder(message: "Select the base folder for VirtualMic data") {
+        pickFolder(message: "Select the base folder for Pouet data") {
             app.setBaseDir($0)
             showToast("Base folder updated")
         }
@@ -774,7 +774,7 @@ struct ContentView: View {
     }
 
     private func performInstall() {
-        guard let driverSource = Bundle.main.url(forResource: "VirtualMic", withExtension: "driver") else {
+        guard let driverSource = Bundle.main.url(forResource: "Pouet", withExtension: "driver") else {
             showToast("Driver bundle not found in app resources")
             return
         }
@@ -782,9 +782,9 @@ struct ContentView: View {
         let dst = "/Library/Audio/Plug-Ins/HAL"
         let script = """
         do shell script "mkdir -p \(dst); \
-        rm -rf \(dst)/VirtualMic.driver; \
+        rm -rf \(dst)/Pouet.driver; \
         cp -R \\\"\(src)\\\" \(dst)/; \
-        chown -R root:wheel \(dst)/VirtualMic.driver; \
+        chown -R root:wheel \(dst)/Pouet.driver; \
         killall -9 coreaudiod 2>/dev/null || true" with administrator privileges
         """
         DispatchQueue.global(qos: .userInitiated).async {
@@ -807,7 +807,7 @@ struct ContentView: View {
         app.shutdown()
 
         let script = """
-        do shell script "rm -rf /Library/Audio/Plug-Ins/HAL/VirtualMic.driver; \
+        do shell script "rm -rf /Library/Audio/Plug-Ins/HAL/Pouet.driver; \
         killall -9 coreaudiod 2>/dev/null || true" with administrator privileges
         """
         DispatchQueue.global(qos: .userInitiated).async {
@@ -817,7 +817,7 @@ struct ContentView: View {
                 DispatchQueue.main.async {
                     if error == nil {
                         showToast("Driver uninstalled — Core Audio restarted")
-                        // Refresh device list since VirtualMic is now gone
+                        // Refresh device list since Pouet is now gone
                         app.loadDevices()
                     } else {
                         showToast("Uninstall cancelled or failed")

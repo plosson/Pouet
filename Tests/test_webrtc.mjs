@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// test_webrtc.mjs — Tests VirtualMic through Chrome's voice processing pipeline
+// test_webrtc.mjs — Tests Pouet through Chrome's voice processing pipeline
 // Compares raw capture vs processed (echoCancellation + noiseSuppression + AGC)
 // This simulates what Google Meet / Zoom do to the audio.
 
@@ -23,7 +23,7 @@ async function main() {
   let exitCode = 0;
 
   try {
-    if (!existsSync('/Library/Audio/Plug-Ins/HAL/VirtualMic.driver')) {
+    if (!existsSync('/Library/Audio/Plug-Ins/HAL/Pouet.driver')) {
       throw new Error('Driver not installed. Run: make install');
     }
 
@@ -84,7 +84,7 @@ async function main() {
     // Report
     console.log('');
     console.log('═══════════════════════════════════════════');
-    console.log('  VirtualMic Voice Processing Test');
+    console.log('  Pouet Voice Processing Test');
     console.log('═══════════════════════════════════════════');
     if (results.error) {
       console.log(`  Error: ${results.error}`);

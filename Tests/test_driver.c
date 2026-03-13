@@ -1,4 +1,4 @@
-// test_driver.c — Unit tests for VirtualMic driver ring buffer and timestamp logic
+// test_driver.c — Unit tests for Pouet driver ring buffer and timestamp logic
 // Runs without CoreAudio — copies minimal struct/function definitions from the driver.
 
 #include <stdatomic.h>
@@ -12,11 +12,11 @@
 #include <stdbool.h>
 
 // ---------------------------------------------------------------------------
-// Copied from VirtualMicDriver.c (must stay in sync!)
+// Copied from PouetDriver.c (must stay in sync!)
 // ---------------------------------------------------------------------------
-#define VIRTUALMICDRV_SHM_SIZE       (4096 * 256)
-#define VIRTUALMICDRV_NUM_CHANNELS   2
-#define VIRTUALMICDRV_BUFFER_FRAMES  512
+#define POUET_SHM_SIZE       (4096 * 256)
+#define POUET_NUM_CHANNELS   2
+#define POUET_BUFFER_FRAMES  512
 
 typedef struct {
     _Atomic uint64_t writePos;
@@ -26,11 +26,11 @@ typedef struct {
     uint32_t         capacity;
     uint32_t         _pad;
     float            data[];
-} VirtualMicSHM;
+} PouetSHM;
 
 typedef struct {
     int              shmFd;
-    VirtualMicSHM*   shm;
+    PouetSHM*   shm;
     uint32_t         ioRunning;
     float            volume;
     bool             mute;
@@ -41,10 +41,10 @@ typedef struct {
 // SHM_Read — copied verbatim from driver
 static void SHM_Read(DeviceState* st, float* out, uint32_t numFrames)
 {
-    uint32_t numSamples = numFrames * VIRTUALMICDRV_NUM_CHANNELS;
+    uint32_t numSamples = numFrames * POUET_NUM_CHANNELS;
     if (!st->shm) { memset(out, 0, numSamples * sizeof(float)); return; }
 
-    VirtualMicSHM* shm = st->shm;
+    PouetSHM* shm = st->shm;
     uint64_t rp = atomic_load_explicit(&shm->readPos,  memory_order_acquire);
     uint64_t wp = atomic_load_explicit(&shm->writePos, memory_order_acquire);
     uint64_t avail = wp - rp;
@@ -74,10 +74,10 @@ static void SHM_Read(DeviceState* st, float* out, uint32_t numFrames)
 // SHM_Write — copied verbatim from driver
 static void SHM_Write(DeviceState* st, const float* in, uint32_t numFrames)
 {
-    uint32_t numSamples = numFrames * VIRTUALMICDRV_NUM_CHANNELS;
+    uint32_t numSamples = numFrames * POUET_NUM_CHANNELS;
     if (!st->shm) return;
 
-    VirtualMicSHM* shm = st->shm;
+    PouetSHM* shm = st->shm;
     uint64_t wp = atomic_load_explicit(&shm->writePos, memory_order_acquire);
     uint32_t cap = shm->capacity;
     if (cap == 0) return;
@@ -100,16 +100,16 @@ static int tests_run = 0, tests_passed = 0;
     printf("OK\n"); \
 } while(0)
 
-static VirtualMicSHM* alloc_shm(uint32_t cap) {
-    size_t sz = sizeof(VirtualMicSHM) + cap * sizeof(float);
-    VirtualMicSHM* shm = (VirtualMicSHM*)calloc(1, sz);
+static PouetSHM* alloc_shm(uint32_t cap) {
+    size_t sz = sizeof(PouetSHM) + cap * sizeof(float);
+    PouetSHM* shm = (PouetSHM*)calloc(1, sz);
     shm->capacity = cap;
     atomic_store(&shm->writePos, 0);
     atomic_store(&shm->readPos, 0);
     return shm;
 }
 
-static DeviceState make_state(VirtualMicSHM* shm) {
+static DeviceState make_state(PouetSHM* shm) {
     DeviceState st = {0};
     st.shm = shm;
     st.shmFd = -1;
@@ -125,18 +125,18 @@ static void test_struct_size(void) {
     // Header must be 136 bytes (before flexible array)
     // 8 (writePos) + 56 (pad1) + 8 (readPos) + 56 (pad2) + 4 (capacity) + 4 (pad) = 136
     size_t expected = 136;
-    size_t actual = sizeof(VirtualMicSHM);
+    size_t actual = sizeof(PouetSHM);
     if (actual != expected) {
-        fprintf(stderr, "\nFAIL: sizeof(VirtualMicSHM) = %zu, expected %zu\n", actual, expected);
+        fprintf(stderr, "\nFAIL: sizeof(PouetSHM) = %zu, expected %zu\n", actual, expected);
     }
     assert(actual == expected);
 }
 
 static void test_struct_field_offsets(void) {
-    assert(offsetof(VirtualMicSHM, writePos) == 0);
-    assert(offsetof(VirtualMicSHM, readPos)  == 64);
-    assert(offsetof(VirtualMicSHM, capacity) == 128);
-    assert(offsetof(VirtualMicSHM, data)     == 136);
+    assert(offsetof(PouetSHM, writePos) == 0);
+    assert(offsetof(PouetSHM, readPos)  == 64);
+    assert(offsetof(PouetSHM, capacity) == 128);
+    assert(offsetof(PouetSHM, data)     == 136);
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +144,7 @@ static void test_struct_field_offsets(void) {
 // ---------------------------------------------------------------------------
 static void test_read_write_basic(void) {
     uint32_t cap = 2048;
-    VirtualMicSHM* shm = alloc_shm(cap);
+    PouetSHM* shm = alloc_shm(cap);
     DeviceState st = make_state(shm);
 
     // Write 256 frames = 512 stereo samples
@@ -166,7 +166,7 @@ static void test_read_write_basic(void) {
 }
 
 static void test_read_empty_returns_silence(void) {
-    VirtualMicSHM* shm = alloc_shm(1024);
+    PouetSHM* shm = alloc_shm(1024);
     DeviceState st = make_state(shm);
 
     float output[512];
@@ -180,7 +180,7 @@ static void test_read_empty_returns_silence(void) {
 }
 
 static void test_read_underflow_returns_silence(void) {
-    VirtualMicSHM* shm = alloc_shm(2048);
+    PouetSHM* shm = alloc_shm(2048);
     DeviceState st = make_state(shm);
 
     // Write only 50 samples (25 frames)
@@ -201,7 +201,7 @@ static void test_read_underflow_returns_silence(void) {
 
 static void test_write_read_wraparound(void) {
     uint32_t cap = 256;
-    VirtualMicSHM* shm = alloc_shm(cap);
+    PouetSHM* shm = alloc_shm(cap);
     DeviceState st = make_state(shm);
 
     // Advance positions to near end of buffer
@@ -226,7 +226,7 @@ static void test_write_read_wraparound(void) {
 
 static void test_read_skip_ahead_on_overflow(void) {
     uint32_t cap = 2048;
-    VirtualMicSHM* shm = alloc_shm(cap);
+    PouetSHM* shm = alloc_shm(cap);
     DeviceState st = make_state(shm);
 
     // Write 1500 samples (750 frames)
@@ -249,7 +249,7 @@ static void test_read_skip_ahead_on_overflow(void) {
 }
 
 static void test_volume_scaling(void) {
-    VirtualMicSHM* shm = alloc_shm(2048);
+    PouetSHM* shm = alloc_shm(2048);
     DeviceState st = make_state(shm);
     st.volume = 0.5f;
 
@@ -272,7 +272,7 @@ static void test_volume_scaling(void) {
 }
 
 static void test_mute(void) {
-    VirtualMicSHM* shm = alloc_shm(2048);
+    PouetSHM* shm = alloc_shm(2048);
     DeviceState st = make_state(shm);
 
     float input[512];
@@ -292,7 +292,7 @@ static void test_mute(void) {
 }
 
 static void test_zero_capacity_safe(void) {
-    VirtualMicSHM* shm = alloc_shm(0);
+    PouetSHM* shm = alloc_shm(0);
     shm->capacity = 0;
     DeviceState st = make_state(shm);
 
@@ -327,7 +327,7 @@ static void test_null_shm_safe(void) {
 }
 
 static void test_writepos_monotonic(void) {
-    VirtualMicSHM* shm = alloc_shm(4096);
+    PouetSHM* shm = alloc_shm(4096);
     DeviceState st = make_state(shm);
 
     float input[512];
@@ -360,7 +360,7 @@ static void calc_zero_timestamp(uint64_t anchor, double sampleRate,
     double elapsedNs = (double)elapsed * (double)tb.numer / (double)tb.denom;
     uint64_t elapsedFrames = (uint64_t)(elapsedNs * sampleRate / 1e9);
 
-    uint64_t period = VIRTUALMICDRV_BUFFER_FRAMES;
+    uint64_t period = POUET_BUFFER_FRAMES;
     uint64_t currentPeriod = elapsedFrames / period;
 
     *outSampleTime = (double)(currentPeriod * period);
@@ -408,7 +408,7 @@ static void test_timestamp_sample_time_is_period_multiple(void) {
         uint64_t now = ms * 1000000; // ms to ns
         calc_zero_timestamp(0, 48000.0, tb, now, &sampleTime, &hostTime);
         uint64_t st = (uint64_t)sampleTime;
-        assert(st % VIRTUALMICDRV_BUFFER_FRAMES == 0);
+        assert(st % POUET_BUFFER_FRAMES == 0);
     }
 }
 
@@ -429,7 +429,7 @@ static void test_timestamp_large_elapsed(void) {
     assert(sampleTime > 4e9);
     assert(sampleTime < 5e9);
     uint64_t st = (uint64_t)sampleTime;
-    assert(st % VIRTUALMICDRV_BUFFER_FRAMES == 0);
+    assert(st % POUET_BUFFER_FRAMES == 0);
     assert(hostTime > anchor);
 }
 
@@ -464,7 +464,7 @@ static void test_sample_rate_validation(void) {
 
 typedef struct {
     DeviceState* st;
-    VirtualMicSHM* shm;
+    PouetSHM* shm;
     uint32_t cap;
     int iterations;
     volatile int* stop_flag;
@@ -500,7 +500,7 @@ static void* reader_thread(void* arg) {
 
 static void test_concurrent_read_write_stress(void) {
     uint32_t cap = 8192;
-    VirtualMicSHM* shm = alloc_shm(cap);
+    PouetSHM* shm = alloc_shm(cap);
     // Writer and reader use separate DeviceState but same shm (like driver vs app)
     DeviceState writer_st = make_state(shm);
     DeviceState reader_st = make_state(shm);
@@ -526,7 +526,7 @@ static void test_concurrent_read_write_stress(void) {
 // --- Multiple concurrent writers (simulates driver + app both writing) ---
 static void test_concurrent_multi_writer_stress(void) {
     uint32_t cap = 8192;
-    VirtualMicSHM* shm = alloc_shm(cap);
+    PouetSHM* shm = alloc_shm(cap);
     DeviceState st1 = make_state(shm);
     DeviceState st2 = make_state(shm);
     volatile int stop_flag = 0;
@@ -550,7 +550,7 @@ static void test_concurrent_multi_writer_stress(void) {
 // Real audio hardware can produce these. Driver must not crash or propagate garbage.
 static void test_nan_inf_data_does_not_crash(void) {
     uint32_t cap = 2048;
-    VirtualMicSHM* shm = alloc_shm(cap);
+    PouetSHM* shm = alloc_shm(cap);
     DeviceState st = make_state(shm);
 
     float poison[512];
@@ -579,7 +579,7 @@ static void test_nan_inf_data_does_not_crash(void) {
 // --- Mute with NaN data: output must be exactly zero ---
 static void test_mute_zeroes_nan_data(void) {
     uint32_t cap = 2048;
-    VirtualMicSHM* shm = alloc_shm(cap);
+    PouetSHM* shm = alloc_shm(cap);
     DeviceState st = make_state(shm);
 
     float poison[512];
@@ -599,7 +599,7 @@ static void test_mute_zeroes_nan_data(void) {
 // --- Position overflow: writePos wrapping past UINT64_MAX ---
 static void test_position_overflow_uint64(void) {
     uint32_t cap = 2048;
-    VirtualMicSHM* shm = alloc_shm(cap);
+    PouetSHM* shm = alloc_shm(cap);
     DeviceState st = make_state(shm);
 
     // Set positions near UINT64_MAX
@@ -628,7 +628,7 @@ static void test_position_overflow_uint64(void) {
 // Could happen if SHM is stale or from a different version
 static void test_corrupted_readpos_ahead_of_writepos(void) {
     uint32_t cap = 2048;
-    VirtualMicSHM* shm = alloc_shm(cap);
+    PouetSHM* shm = alloc_shm(cap);
     DeviceState st = make_state(shm);
 
     // Corrupt: readPos far ahead of writePos
@@ -653,7 +653,7 @@ static void test_corrupted_readpos_ahead_of_writepos(void) {
 // --- Huge frame request: numFrames much larger than capacity ---
 static void test_huge_frame_request(void) {
     uint32_t cap = 256;
-    VirtualMicSHM* shm = alloc_shm(cap);
+    PouetSHM* shm = alloc_shm(cap);
     DeviceState st = make_state(shm);
 
     // Fill buffer
@@ -678,7 +678,7 @@ static void test_huge_frame_request(void) {
 
 // --- Volume edge cases: zero, negative, huge ---
 static void test_volume_zero(void) {
-    VirtualMicSHM* shm = alloc_shm(2048);
+    PouetSHM* shm = alloc_shm(2048);
     DeviceState st = make_state(shm);
     st.volume = 0.0f;
 
@@ -694,7 +694,7 @@ static void test_volume_zero(void) {
 }
 
 static void test_volume_negative(void) {
-    VirtualMicSHM* shm = alloc_shm(2048);
+    PouetSHM* shm = alloc_shm(2048);
     DeviceState st = make_state(shm);
     st.volume = -1.0f;
 
@@ -710,7 +710,7 @@ static void test_volume_negative(void) {
 }
 
 static void test_volume_huge(void) {
-    VirtualMicSHM* shm = alloc_shm(2048);
+    PouetSHM* shm = alloc_shm(2048);
     DeviceState st = make_state(shm);
     st.volume = 1e10f;
 
@@ -727,7 +727,7 @@ static void test_volume_huge(void) {
 }
 
 static void test_volume_nan(void) {
-    VirtualMicSHM* shm = alloc_shm(2048);
+    PouetSHM* shm = alloc_shm(2048);
     DeviceState st = make_state(shm);
     st.volume = NAN;
 
@@ -741,7 +741,7 @@ static void test_volume_nan(void) {
 
 // --- Capacity = 1: degenerate minimal buffer ---
 static void test_capacity_one(void) {
-    VirtualMicSHM* shm = alloc_shm(1);
+    PouetSHM* shm = alloc_shm(1);
     DeviceState st = make_state(shm);
 
     float input[2] = {0.5f, 0.5f};
@@ -757,7 +757,7 @@ static void test_capacity_one(void) {
 // --- Non-power-of-2 capacity: tests modulo math ---
 static void test_odd_capacity(void) {
     uint32_t cap = 777;
-    VirtualMicSHM* shm = alloc_shm(cap);
+    PouetSHM* shm = alloc_shm(cap);
     DeviceState st = make_state(shm);
 
     // Write and read multiple rounds, wrapping around odd boundary
@@ -783,7 +783,7 @@ static void test_odd_capacity(void) {
 // --- Rapid start/stop: alternating null/non-null shm ---
 // Simulates what happens if StopIO races with DoIOOperation
 static void test_rapid_null_toggle(void) {
-    VirtualMicSHM* shm = alloc_shm(2048);
+    PouetSHM* shm = alloc_shm(2048);
     DeviceState st = make_state(shm);
 
     float input[512], output[512];
@@ -806,7 +806,7 @@ static void test_rapid_null_toggle(void) {
 static void test_write_exact_capacity(void) {
     // cap = 512 samples, write exactly 256 frames * 2 channels = 512
     uint32_t cap = 512;
-    VirtualMicSHM* shm = alloc_shm(cap);
+    PouetSHM* shm = alloc_shm(cap);
     DeviceState st = make_state(shm);
 
     float input[512];
@@ -829,7 +829,7 @@ static void test_write_exact_capacity(void) {
 // This simulates what happened with the old 24-byte header:
 // capacity field was at the wrong offset, reading garbage
 static void test_garbage_capacity(void) {
-    VirtualMicSHM* shm = alloc_shm(2048);
+    PouetSHM* shm = alloc_shm(2048);
     DeviceState st = make_state(shm);
 
     // Corrupt capacity to a huge value
@@ -865,7 +865,7 @@ static void test_timestamp_anchor_change_during_io(void) {
         calc_zero_timestamp(anchor, 48000.0, tb, now, &sampleTime, &hostTime);
 
         uint64_t st = (uint64_t)sampleTime;
-        assert(st % VIRTUALMICDRV_BUFFER_FRAMES == 0);
+        assert(st % POUET_BUFFER_FRAMES == 0);
         assert(hostTime >= anchor);
     }
 }
@@ -878,11 +878,11 @@ static void test_timestamp_extreme_sample_rates(void) {
 
     // Very low sample rate
     calc_zero_timestamp(0, 1.0, tb, 1000000000, &sampleTime, &hostTime);
-    assert((uint64_t)sampleTime % VIRTUALMICDRV_BUFFER_FRAMES == 0);
+    assert((uint64_t)sampleTime % POUET_BUFFER_FRAMES == 0);
 
     // Very high sample rate
     calc_zero_timestamp(0, 384000.0, tb, 1000000000, &sampleTime, &hostTime);
-    assert((uint64_t)sampleTime % VIRTUALMICDRV_BUFFER_FRAMES == 0);
+    assert((uint64_t)sampleTime % POUET_BUFFER_FRAMES == 0);
     assert(sampleTime > 0);
 }
 

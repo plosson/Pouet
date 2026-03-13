@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// test_audio.mjs — Automated audio quality test suite for VirtualMic
+// test_audio.mjs — Automated audio quality test suite for Pouet
 // Tests: mic passthrough, injection, mixing, silence, stereo, frequency response
 //
 // Usage: node Tests/test_audio.mjs
@@ -12,7 +12,7 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const BIN = join(ROOT, 'build', 'tone_injector');
-const WAV_PATH = '/tmp/virtualmic_test.wav';
+const WAV_PATH = '/tmp/pouet_test.wav';
 const SAMPLE_RATE = 48000;
 const RECORD_SECONDS = 2;
 
@@ -22,8 +22,8 @@ function log(msg) { console.log(`  ${msg}`); }
 
 function findDeviceIndex() {
   const out = execSync('ffmpeg -f avfoundation -list_devices true -i "" 2>&1 || true', { encoding: 'utf-8' });
-  const m = out.match(/\[(\d+)\] VirtualMic/);
-  if (!m) throw new Error('VirtualMic not found in AVFoundation devices');
+  const m = out.match(/\[(\d+)\] Pouet/);
+  if (!m) throw new Error('Pouet not found in AVFoundation devices');
   return m[1];
 }
 
@@ -152,10 +152,10 @@ function test(name, pass, detail) {
 async function main() {
   console.log('');
   console.log('═══════════════════════════════════════════');
-  console.log('  VirtualMic Audio Test Suite');
+  console.log('  Pouet Audio Test Suite');
   console.log('═══════════════════════════════════════════');
 
-  if (!existsSync('/Library/Audio/Plug-Ins/HAL/VirtualMic.driver')) {
+  if (!existsSync('/Library/Audio/Plug-Ins/HAL/Pouet.driver')) {
     console.error('FATAL: Driver not installed. Run: make install');
     process.exit(1);
   }
@@ -288,7 +288,7 @@ async function main() {
   console.log('');
   log('Test 7: Long recording stability (5s)');
   {
-    const longWav = '/tmp/virtualmic_long.wav';
+    const longWav = '/tmp/pouet_long.wav';
     const longDuration = 5;
     const proc = spawn(BIN, [String(longDuration + 4), 'mic'], { stdio: ['ignore', 'ignore', 'inherit'] });
     await new Promise(r => setTimeout(r, 1000));

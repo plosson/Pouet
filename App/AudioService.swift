@@ -8,9 +8,9 @@ import AudioToolbox
 
 // MARK: - Constants
 
-let SHM_NAME         = "/VirtualMicAudio"
-let SHM_INJECT_NAME  = "/VirtualMicInject"
-let SHM_SPEAKER_NAME = "/VirtualSpeakerAudio"
+let SHM_NAME         = "/PouetAudio"
+let SHM_INJECT_NAME  = "/PouetInject"
+let SHM_SPEAKER_NAME = "/PouetSpeakerAudio"
 let SHM_DATA_SIZE    = 4096 * 256
 let SAMPLE_RATE      = 48000.0
 let NUM_CHANNELS: UInt32 = 2
@@ -514,7 +514,7 @@ private func speakerProxyRenderCallback(
     let numSamples = Int(inNumberFrames) * Int(NUM_CHANNELS)
     let abl = UnsafeMutableAudioBufferListPointer(bufList)
 
-    // Read from VirtualSpeaker SHM
+    // Read from PouetSpeaker SHM
     let read = proxy.speakerRing.read(into: proxy.readBuf, maxSamples: numSamples)
 
     // Feed rolling buffer for dashcam
@@ -707,7 +707,7 @@ class AudioService {
     }
 
     func listDevices() -> [AudioDeviceInfo] {
-        listDevicesInternal(scope: kAudioDevicePropertyScopeInput, excludeUIDs: ["VirtualMic"])
+        listDevicesInternal(scope: kAudioDevicePropertyScopeInput, excludeUIDs: ["Pouet"])
     }
 
     private func findDeviceIn(_ devices: [AudioDeviceInfo], matching query: String) -> AudioDeviceInfo? {
@@ -759,13 +759,13 @@ class AudioService {
     var isSpeakerProxyRunning: Bool { speakerProxy != nil }
 
     func listOutputDevices() -> [AudioDeviceInfo] {
-        listDevicesInternal(scope: kAudioDevicePropertyScopeOutput, excludeUIDs: ["VirtualMic", "VirtualSpeaker"])
+        listDevicesInternal(scope: kAudioDevicePropertyScopeOutput, excludeUIDs: ["Pouet", "PouetSpeaker"])
     }
 
     func defaultDevice(input: Bool) -> AudioDeviceInfo? {
         guard let deviceID = getSystemDefaultDevice(input: input) else { return nil }
         let uid = getAudioDeviceStringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID) ?? ""
-        if uid.contains("VirtualMic") || uid.contains("VirtualSpeaker") { return nil }
+        if uid.contains("Pouet") || uid.contains("PouetSpeaker") { return nil }
         let name = getAudioDeviceStringProperty(deviceID, selector: kAudioObjectPropertyName) ?? ""
         return AudioDeviceInfo(id: deviceID, name: name, uid: uid, inputChannels: 0)
     }
@@ -945,7 +945,7 @@ class AudioService {
     func getNonVirtualDefaultDevice(input: Bool) -> AudioDeviceID? {
         guard let deviceID = getSystemDefaultDevice(input: input) else { return nil }
         let uid = getAudioDeviceStringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID) ?? ""
-        if uid.contains("VirtualMic") || uid.contains("VirtualSpeaker") { return nil }
+        if uid.contains("Pouet") || uid.contains("PouetSpeaker") { return nil }
         return deviceID
     }
 
@@ -965,9 +965,9 @@ class AudioService {
         return status == noErr
     }
 
-    /// Check if VirtualMic appears as an audio device in the system
+    /// Check if Pouet appears as an audio device in the system
     var virtualMicVisible: Bool {
-        findDeviceByUID("VirtualMic") != nil || findDeviceByUID("VirtualSpeaker") != nil
+        findDeviceByUID("Pouet") != nil || findDeviceByUID("PouetSpeaker") != nil
     }
 
     // MARK: - Audio Decoding

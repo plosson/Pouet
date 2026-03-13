@@ -1,4 +1,4 @@
-// test_app.swift — Unit tests for VirtualMic Swift-side shared memory and ring buffer
+// test_app.swift — Unit tests for Pouet Swift-side shared memory and ring buffer
 // Uses shm_bridge.h via bridging header for atomic helpers and SHMHeaderC.
 // All tests use heap memory (no POSIX shm needed).
 

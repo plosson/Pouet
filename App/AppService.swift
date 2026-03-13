@@ -14,12 +14,12 @@ struct AppConfig: Codable {
     var injectVolume: Float?
     var selectedOutputDevice: String?
     var dashcamBufferSeconds: Double?
-    var savedInputDefaultUID: String?   // original system default before we switched to VirtualMic
-    var savedOutputDefaultUID: String?  // original system default before we switched to VirtualSpeaker
+    var savedInputDefaultUID: String?   // original system default before we switched to Pouet
+    var savedOutputDefaultUID: String?  // original system default before we switched to PouetSpeaker
 
-    static let defaultPath = NSHomeDirectory() + "/.virtualmicapp.json"
+    static let defaultPath = NSHomeDirectory() + "/.pouetapp.json"
     static let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.path
-    static let defaultBaseDir = (documentsDir as NSString).appendingPathComponent("VirtualMic")
+    static let defaultBaseDir = (documentsDir as NSString).appendingPathComponent("Pouet")
 
     var soundsDir: String { (baseDir as NSString).appendingPathComponent("Sounds") }
     var snapshotsDir: String { (baseDir as NSString).appendingPathComponent("Recordings") }
@@ -155,14 +155,14 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         config.save()
 
         // Switch system defaults to virtual devices
-        if let vmID = audio.findDeviceByUID("VirtualMic") {
+        if let vmID = audio.findDeviceByUID("Pouet") {
             if audio.setSystemDefaultDevice(input: true, deviceID: vmID) {
-                Log.info("System default input -> VirtualMic")
+                Log.info("System default input -> Pouet")
             }
         }
-        if let vsID = audio.findDeviceByUID("VirtualSpeaker") {
+        if let vsID = audio.findDeviceByUID("PouetSpeaker") {
             if audio.setSystemDefaultDevice(input: false, deviceID: vsID) {
-                Log.info("System default output -> VirtualSpeaker")
+                Log.info("System default output -> PouetSpeaker")
             }
         }
 
@@ -407,7 +407,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     var driverInstalled: Bool {
-        FileManager.default.fileExists(atPath: "/Library/Audio/Plug-Ins/HAL/VirtualMic.driver")
+        FileManager.default.fileExists(atPath: "/Library/Audio/Plug-Ins/HAL/Pouet.driver")
     }
 
     // MARK: - Polling

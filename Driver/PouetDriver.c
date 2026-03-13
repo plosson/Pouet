@@ -1,8 +1,8 @@
-// VirtualMicDriver.c
+// PouetDriver.c
 // Audio Server Plugin that creates a virtual microphone AND a virtual speaker device.
-// VirtualMic (input):   App writes mic audio → SHM → driver serves to apps as microphone
-// VirtualSpeaker (output): Apps play audio → driver writes to SHM → App reads for dashcam/proxy
-// Install to: /Library/Audio/Plug-Ins/HAL/VirtualMic.driver
+// Pouet (input):   App writes mic audio → SHM → driver serves to apps as microphone
+// PouetSpeaker (output): Apps play audio → driver writes to SHM → App reads for dashcam/proxy
+// Install to: /Library/Audio/Plug-Ins/HAL/Pouet.driver
 
 #include <CoreAudio/AudioServerPlugIn.h>
 #include <CoreAudio/AudioHardwareBase.h>
@@ -24,16 +24,16 @@ static os_log_t sDriverLog;
 // ---------------------------------------------------------------------------
 // Shared memory layout (must match App side: SharedMemory.h)
 // ---------------------------------------------------------------------------
-#define VIRTUALMICDRV_SHM_NAME   "/VirtualMicAudio"
-#define VIRTUALSPEAKER_SHM_NAME  "/VirtualSpeakerAudio"
-#define VIRTUALMICDRV_SHM_SIZE   (4096 * 256)   // ~1 second at 48kHz stereo f32
+#define POUET_SHM_NAME           "/PouetAudio"
+#define POUET_SPEAKER_SHM_NAME   "/PouetSpeakerAudio"
+#define POUET_SHM_SIZE   (4096 * 256)   // ~1 second at 48kHz stereo f32
 
-#define VIRTUALMICDRV_SAMPLE_RATE    48000.0
-#define VIRTUALMICDRV_NUM_CHANNELS   2
-#define VIRTUALMICDRV_BUFFER_FRAMES  512
-#define VIRTUALMICDRV_SAFETY_OFFSET  64     // frames of breathing room for producer (~1.3ms at 48kHz)
-#define VIRTUALMICDRV_MAX_LAG_MULT  3      // allow 3 buffer periods of clock drift before compression
-#define VIRTUALMICDRV_LAP_SKIP_DIV  2      // on producer lap, skip to middle of valid data (cap/2)
+#define POUET_SAMPLE_RATE    48000.0
+#define POUET_NUM_CHANNELS   2
+#define POUET_BUFFER_FRAMES  512
+#define POUET_SAFETY_OFFSET  64     // frames of breathing room for producer (~1.3ms at 48kHz)
+#define POUET_MAX_LAG_MULT  3      // allow 3 buffer periods of clock drift before compression
+#define POUET_LAP_SKIP_DIV  2      // on producer lap, skip to middle of valid data (cap/2)
 
 // Ring buffer header lives at the start of the shared memory region.
 typedef struct {
@@ -44,23 +44,23 @@ typedef struct {
     uint32_t         capacity;  // total float samples in data[]
     uint32_t         _pad;
     float            data[];    // interleaved PCM frames follow
-} VirtualMicSHM;
+} PouetSHM;
 
-_Static_assert(sizeof(VirtualMicSHM) == 136, "SHM header size mismatch — must match Swift SHMHeader");
-_Static_assert(offsetof(VirtualMicSHM, readPos) == 64, "readPos offset mismatch");
-_Static_assert(offsetof(VirtualMicSHM, capacity) == 128, "capacity offset mismatch");
+_Static_assert(sizeof(PouetSHM) == 136, "SHM header size mismatch — must match Swift SHMHeader");
+_Static_assert(offsetof(PouetSHM, readPos) == 64, "readPos offset mismatch");
+_Static_assert(offsetof(PouetSHM, capacity) == 128, "capacity offset mismatch");
 
 // ---------------------------------------------------------------------------
 // Object IDs
 // ---------------------------------------------------------------------------
 #define kPluginObjectID         1
 
-// VirtualMic (input device)
+// Pouet (input device)
 #define kMicDeviceID            2
 #define kMicInputStreamID       3
 #define kMicVolumeCtrlID        5
 
-// VirtualSpeaker (output device)
+// PouetSpeaker (output device)
 #define kSpkDeviceID            6
 #define kSpkOutputStreamID      7
 #define kSpkVolumeCtrlID        8
@@ -86,28 +86,28 @@ static const DeviceDesc kMicDesc = {
     .deviceID        = kMicDeviceID,
     .streamID        = kMicInputStreamID,
     .volumeCtrlID    = kMicVolumeCtrlID,
-    .name            = "VirtualMic",
-    .uid             = "VirtualMic-UID-001",
-    .modelUID        = "VirtualMic-Model-001",
+    .name            = "Pouet",
+    .uid             = "Pouet-UID-001",
+    .modelUID        = "Pouet-Model-001",
     .streamDirection = 1,
     .terminalType    = kAudioStreamTerminalTypeMicrophone,
     .defaultScope    = kAudioObjectPropertyScopeInput,
     .canBeDefaultSystem = false,
-    .shmName         = VIRTUALMICDRV_SHM_NAME,
+    .shmName         = POUET_SHM_NAME,
 };
 
 static const DeviceDesc kSpkDesc = {
     .deviceID        = kSpkDeviceID,
     .streamID        = kSpkOutputStreamID,
     .volumeCtrlID    = kSpkVolumeCtrlID,
-    .name            = "VirtualSpeaker",
-    .uid             = "VirtualSpeaker-UID-001",
-    .modelUID        = "VirtualSpeaker-Model-001",
+    .name            = "PouetSpeaker",
+    .uid             = "PouetSpeaker-UID-001",
+    .modelUID        = "PouetSpeaker-Model-001",
     .streamDirection = 0,
     .terminalType    = kAudioStreamTerminalTypeSpeaker,
     .defaultScope    = kAudioObjectPropertyScopeOutput,
     .canBeDefaultSystem = false,
-    .shmName         = VIRTUALSPEAKER_SHM_NAME,
+    .shmName         = POUET_SPEAKER_SHM_NAME,
 };
 
 static const DeviceDesc* DeviceDescForID(AudioObjectID id)
@@ -136,7 +136,7 @@ static const DeviceDesc* DeviceDescForVolumeID(AudioObjectID volID)
 // ---------------------------------------------------------------------------
 typedef struct {
     int            shmFd;
-    VirtualMicSHM* shm;
+    PouetSHM* shm;
     UInt32         ioRunning;
     Float32        volume;
     Boolean        mute;
@@ -159,9 +159,9 @@ typedef struct {
 
     DeviceState     mic;
     DeviceState     spk;
-} VirtualMicDriver;
+} PouetDriver;
 
-static DeviceState* StateForDevice(VirtualMicDriver* d, AudioObjectID devID)
+static DeviceState* StateForDevice(PouetDriver* d, AudioObjectID devID)
 {
     if (devID == kMicDeviceID) return &d->mic;
     if (devID == kSpkDeviceID) return &d->spk;
@@ -171,64 +171,64 @@ static DeviceState* StateForDevice(VirtualMicDriver* d, AudioObjectID devID)
 // ---------------------------------------------------------------------------
 // Forward declarations
 // ---------------------------------------------------------------------------
-static HRESULT          VirtualMic_QueryInterface(void*, REFIID, LPVOID*);
-static ULONG            VirtualMic_AddRef(void*);
-static ULONG            VirtualMic_Release(void*);
-static OSStatus         VirtualMic_Initialize(AudioServerPlugInDriverRef, AudioServerPlugInHostRef);
-static OSStatus         VirtualMic_CreateDevice(AudioServerPlugInDriverRef, CFDictionaryRef, const AudioServerPlugInClientInfo*, AudioObjectID*);
-static OSStatus         VirtualMic_DestroyDevice(AudioServerPlugInDriverRef, AudioObjectID);
-static OSStatus         VirtualMic_AddDeviceClient(AudioServerPlugInDriverRef, AudioObjectID, const AudioServerPlugInClientInfo*);
-static OSStatus         VirtualMic_RemoveDeviceClient(AudioServerPlugInDriverRef, AudioObjectID, const AudioServerPlugInClientInfo*);
-static OSStatus         VirtualMic_PerformDeviceConfigurationChange(AudioServerPlugInDriverRef, AudioObjectID, UInt64, void*);
-static OSStatus         VirtualMic_AbortDeviceConfigurationChange(AudioServerPlugInDriverRef, AudioObjectID, UInt64, void*);
-static Boolean          VirtualMic_HasProperty(AudioServerPlugInDriverRef, AudioObjectID, pid_t, const AudioObjectPropertyAddress*);
-static OSStatus         VirtualMic_IsPropertySettable(AudioServerPlugInDriverRef, AudioObjectID, pid_t, const AudioObjectPropertyAddress*, Boolean*);
-static OSStatus         VirtualMic_GetPropertyDataSize(AudioServerPlugInDriverRef, AudioObjectID, pid_t, const AudioObjectPropertyAddress*, UInt32, const void*, UInt32*);
-static OSStatus         VirtualMic_GetPropertyData(AudioServerPlugInDriverRef, AudioObjectID, pid_t, const AudioObjectPropertyAddress*, UInt32, const void*, UInt32, UInt32*, void*);
-static OSStatus         VirtualMic_SetPropertyData(AudioServerPlugInDriverRef, AudioObjectID, pid_t, const AudioObjectPropertyAddress*, UInt32, const void*, UInt32, const void*);
-static OSStatus         VirtualMic_StartIO(AudioServerPlugInDriverRef, AudioObjectID, UInt32);
-static OSStatus         VirtualMic_StopIO(AudioServerPlugInDriverRef, AudioObjectID, UInt32);
-static OSStatus         VirtualMic_GetZeroTimeStamp(AudioServerPlugInDriverRef, AudioObjectID, UInt32, Float64*, UInt64*, UInt64*);
-static OSStatus         VirtualMic_WillDoIOOperation(AudioServerPlugInDriverRef, AudioObjectID, UInt32, UInt32, Boolean*, Boolean*);
-static OSStatus         VirtualMic_BeginIOOperation(AudioServerPlugInDriverRef, AudioObjectID, UInt32, UInt32, UInt32, const AudioServerPlugInIOCycleInfo*);
-static OSStatus         VirtualMic_DoIOOperation(AudioServerPlugInDriverRef, AudioObjectID, AudioObjectID, UInt32, UInt32, UInt32, const AudioServerPlugInIOCycleInfo*, void*, void*);
-static OSStatus         VirtualMic_EndIOOperation(AudioServerPlugInDriverRef, AudioObjectID, UInt32, UInt32, UInt32, const AudioServerPlugInIOCycleInfo*);
+static HRESULT          Pouet_QueryInterface(void*, REFIID, LPVOID*);
+static ULONG            Pouet_AddRef(void*);
+static ULONG            Pouet_Release(void*);
+static OSStatus         Pouet_Initialize(AudioServerPlugInDriverRef, AudioServerPlugInHostRef);
+static OSStatus         Pouet_CreateDevice(AudioServerPlugInDriverRef, CFDictionaryRef, const AudioServerPlugInClientInfo*, AudioObjectID*);
+static OSStatus         Pouet_DestroyDevice(AudioServerPlugInDriverRef, AudioObjectID);
+static OSStatus         Pouet_AddDeviceClient(AudioServerPlugInDriverRef, AudioObjectID, const AudioServerPlugInClientInfo*);
+static OSStatus         Pouet_RemoveDeviceClient(AudioServerPlugInDriverRef, AudioObjectID, const AudioServerPlugInClientInfo*);
+static OSStatus         Pouet_PerformDeviceConfigurationChange(AudioServerPlugInDriverRef, AudioObjectID, UInt64, void*);
+static OSStatus         Pouet_AbortDeviceConfigurationChange(AudioServerPlugInDriverRef, AudioObjectID, UInt64, void*);
+static Boolean          Pouet_HasProperty(AudioServerPlugInDriverRef, AudioObjectID, pid_t, const AudioObjectPropertyAddress*);
+static OSStatus         Pouet_IsPropertySettable(AudioServerPlugInDriverRef, AudioObjectID, pid_t, const AudioObjectPropertyAddress*, Boolean*);
+static OSStatus         Pouet_GetPropertyDataSize(AudioServerPlugInDriverRef, AudioObjectID, pid_t, const AudioObjectPropertyAddress*, UInt32, const void*, UInt32*);
+static OSStatus         Pouet_GetPropertyData(AudioServerPlugInDriverRef, AudioObjectID, pid_t, const AudioObjectPropertyAddress*, UInt32, const void*, UInt32, UInt32*, void*);
+static OSStatus         Pouet_SetPropertyData(AudioServerPlugInDriverRef, AudioObjectID, pid_t, const AudioObjectPropertyAddress*, UInt32, const void*, UInt32, const void*);
+static OSStatus         Pouet_StartIO(AudioServerPlugInDriverRef, AudioObjectID, UInt32);
+static OSStatus         Pouet_StopIO(AudioServerPlugInDriverRef, AudioObjectID, UInt32);
+static OSStatus         Pouet_GetZeroTimeStamp(AudioServerPlugInDriverRef, AudioObjectID, UInt32, Float64*, UInt64*, UInt64*);
+static OSStatus         Pouet_WillDoIOOperation(AudioServerPlugInDriverRef, AudioObjectID, UInt32, UInt32, Boolean*, Boolean*);
+static OSStatus         Pouet_BeginIOOperation(AudioServerPlugInDriverRef, AudioObjectID, UInt32, UInt32, UInt32, const AudioServerPlugInIOCycleInfo*);
+static OSStatus         Pouet_DoIOOperation(AudioServerPlugInDriverRef, AudioObjectID, AudioObjectID, UInt32, UInt32, UInt32, const AudioServerPlugInIOCycleInfo*, void*, void*);
+static OSStatus         Pouet_EndIOOperation(AudioServerPlugInDriverRef, AudioObjectID, UInt32, UInt32, UInt32, const AudioServerPlugInIOCycleInfo*);
 
 // ---------------------------------------------------------------------------
 // vtable
 // ---------------------------------------------------------------------------
 static AudioServerPlugInDriverInterface gDriverInterface = {
     NULL,                                           // _reserved
-    VirtualMic_QueryInterface,
-    VirtualMic_AddRef,
-    VirtualMic_Release,
-    VirtualMic_Initialize,
-    VirtualMic_CreateDevice,
-    VirtualMic_DestroyDevice,
-    VirtualMic_AddDeviceClient,
-    VirtualMic_RemoveDeviceClient,
-    VirtualMic_PerformDeviceConfigurationChange,
-    VirtualMic_AbortDeviceConfigurationChange,
-    VirtualMic_HasProperty,
-    VirtualMic_IsPropertySettable,
-    VirtualMic_GetPropertyDataSize,
-    VirtualMic_GetPropertyData,
-    VirtualMic_SetPropertyData,
-    VirtualMic_StartIO,
-    VirtualMic_StopIO,
-    VirtualMic_GetZeroTimeStamp,
-    VirtualMic_WillDoIOOperation,
-    VirtualMic_BeginIOOperation,
-    VirtualMic_DoIOOperation,
-    VirtualMic_EndIOOperation
+    Pouet_QueryInterface,
+    Pouet_AddRef,
+    Pouet_Release,
+    Pouet_Initialize,
+    Pouet_CreateDevice,
+    Pouet_DestroyDevice,
+    Pouet_AddDeviceClient,
+    Pouet_RemoveDeviceClient,
+    Pouet_PerformDeviceConfigurationChange,
+    Pouet_AbortDeviceConfigurationChange,
+    Pouet_HasProperty,
+    Pouet_IsPropertySettable,
+    Pouet_GetPropertyDataSize,
+    Pouet_GetPropertyData,
+    Pouet_SetPropertyData,
+    Pouet_StartIO,
+    Pouet_StopIO,
+    Pouet_GetZeroTimeStamp,
+    Pouet_WillDoIOOperation,
+    Pouet_BeginIOOperation,
+    Pouet_DoIOOperation,
+    Pouet_EndIOOperation
 };
 
 static AudioServerPlugInDriverInterface* gDriverInterfacePtr = &gDriverInterface;
 static AudioServerPlugInDriverInterface** gDriverInterfacePtrPtr = &gDriverInterfacePtr;
 
-static VirtualMicDriver gDriver = {
+static PouetDriver gDriver = {
     .driverInterface = &gDriverInterfacePtr,
-    .sampleRate      = VIRTUALMICDRV_SAMPLE_RATE,
+    .sampleRate      = POUET_SAMPLE_RATE,
     .mic = { .shmFd = -1, .shm = NULL, .ioRunning = 0, .volume = 1.0f, .mute = false },
     .spk = { .shmFd = -1, .shm = NULL, .ioRunning = 0, .volume = 1.0f, .mute = false },
 };
@@ -240,7 +240,7 @@ static void SHM_Close(DeviceState* st);  // forward decl
 
 static void SHM_OpenNamed(DeviceState* st, const char* name)
 {
-    size_t sz = sizeof(VirtualMicSHM) + VIRTUALMICDRV_SHM_SIZE;
+    size_t sz = sizeof(PouetSHM) + POUET_SHM_SIZE;
 
     int newFd = shm_open(name, O_RDWR, 0666);
     if (newFd < 0) {
@@ -271,10 +271,10 @@ static void SHM_OpenNamed(DeviceState* st, const char* name)
         os_log_error(sDriverLog, "SHM_OpenNamed: mmap(%{public}s) failed: %{errno}d", name, errno);
         close(st->shmFd); st->shmFd = -1; return;
     }
-    st->shm = (VirtualMicSHM*)m;
+    st->shm = (PouetSHM*)m;
 
     // Ensure capacity is initialized (may have been created by driver before app)
-    uint32_t expectedCap = VIRTUALMICDRV_SHM_SIZE / sizeof(float);
+    uint32_t expectedCap = POUET_SHM_SIZE / sizeof(float);
     if (st->shm->capacity == 0) {
         st->shm->capacity = expectedCap;
         atomic_store_explicit(&st->shm->writePos, 0, memory_order_release);
@@ -284,7 +284,7 @@ static void SHM_OpenNamed(DeviceState* st, const char* name)
 
 static void SHM_Close(DeviceState* st) {
     if (st->shm) {
-        size_t sz = sizeof(VirtualMicSHM) + VIRTUALMICDRV_SHM_SIZE;
+        size_t sz = sizeof(PouetSHM) + POUET_SHM_SIZE;
         munmap(st->shm, sz);
         st->shm = NULL;
     }
@@ -294,7 +294,7 @@ static void SHM_Close(DeviceState* st) {
     }
 }
 
-// Read `numFrames` stereo frames from ring buffer into `out` (for VirtualMic input).
+// Read `numFrames` stereo frames from ring buffer into `out` (for Pouet input).
 // Reads whatever is available and zero-fills the remainder to avoid dropping good data.
 // When too much data accumulates (clock drift), gradually drops evenly-spaced samples
 // Handles all cases with a single resample loop:
@@ -305,10 +305,10 @@ static void SHM_Close(DeviceState* st) {
 //   - Producer lap (avail > cap): skip ahead to valid data
 static void SHM_Read(DeviceState* st, float* out, uint32_t numFrames)
 {
-    uint32_t numSamples = numFrames * VIRTUALMICDRV_NUM_CHANNELS;
+    uint32_t numSamples = numFrames * POUET_NUM_CHANNELS;
     if (!st->shm) { memset(out, 0, numSamples * sizeof(float)); return; }
 
-    VirtualMicSHM* shm = st->shm;
+    PouetSHM* shm = st->shm;
     uint64_t rp = atomic_load_explicit(&shm->readPos,  memory_order_acquire);
     uint64_t wp = atomic_load_explicit(&shm->writePos, memory_order_acquire);
     uint64_t avail = wp - rp;
@@ -318,14 +318,14 @@ static void SHM_Read(DeviceState* st, float* out, uint32_t numFrames)
 
     // Producer lapped us — our data is gone. Skip ahead to valid region.
     if (avail > cap) {
-        rp = wp - cap / VIRTUALMICDRV_LAP_SKIP_DIV;
+        rp = wp - cap / POUET_LAP_SKIP_DIV;
         avail = wp - rp;
     }
 
     if (avail == 0) { memset(out, 0, numSamples * sizeof(float)); return; }
 
     // Determine how many samples to consume.
-    uint64_t maxLag = numSamples * VIRTUALMICDRV_MAX_LAG_MULT;
+    uint64_t maxLag = numSamples * POUET_MAX_LAG_MULT;
     uint64_t toConsume;
     if (avail > maxLag)
         toConsume = avail;          // overrun: drain all excess
@@ -335,30 +335,30 @@ static void SHM_Read(DeviceState* st, float* out, uint32_t numFrames)
         toConsume = avail;          // partial underrun: stretch
 
     // Align to stereo frame boundary
-    toConsume = (toConsume / VIRTUALMICDRV_NUM_CHANNELS) * VIRTUALMICDRV_NUM_CHANNELS;
+    toConsume = (toConsume / POUET_NUM_CHANNELS) * POUET_NUM_CHANNELS;
     if (toConsume == 0) { memset(out, 0, numSamples * sizeof(float)); return; }
 
     // Resample: map toConsume input frames → numFrames output frames.
-    uint32_t toConsumeFrames = (uint32_t)(toConsume / VIRTUALMICDRV_NUM_CHANNELS);
+    uint32_t toConsumeFrames = (uint32_t)(toConsume / POUET_NUM_CHANNELS);
     for (uint32_t f = 0; f < numFrames; f++) {
         uint32_t srcFrame = (uint32_t)((uint64_t)f * toConsumeFrames / numFrames);
-        for (uint32_t ch = 0; ch < VIRTUALMICDRV_NUM_CHANNELS; ch++) {
-            uint32_t idx = (uint32_t)((rp + srcFrame * VIRTUALMICDRV_NUM_CHANNELS + ch) % cap);
+        for (uint32_t ch = 0; ch < POUET_NUM_CHANNELS; ch++) {
+            uint32_t idx = (uint32_t)((rp + srcFrame * POUET_NUM_CHANNELS + ch) % cap);
             float s = shm->data[idx];
             if (st->mute) s = 0.0f;
-            out[f * VIRTUALMICDRV_NUM_CHANNELS + ch] = s * st->volume;
+            out[f * POUET_NUM_CHANNELS + ch] = s * st->volume;
         }
     }
     atomic_store_explicit(&shm->readPos, rp + toConsume, memory_order_release);
 }
 
-// Write `numFrames` stereo frames from apps into ring buffer (for VirtualSpeaker output).
+// Write `numFrames` stereo frames from apps into ring buffer (for PouetSpeaker output).
 static void SHM_Write(DeviceState* st, const float* in, uint32_t numFrames)
 {
-    uint32_t numSamples = numFrames * VIRTUALMICDRV_NUM_CHANNELS;
+    uint32_t numSamples = numFrames * POUET_NUM_CHANNELS;
     if (!st->shm) return;
 
-    VirtualMicSHM* shm = st->shm;
+    PouetSHM* shm = st->shm;
     uint64_t wp = atomic_load_explicit(&shm->writePos, memory_order_acquire);
     uint32_t cap = shm->capacity;
     if (cap == 0) return;
@@ -374,11 +374,11 @@ static void SHM_Write(DeviceState* st, const float* in, uint32_t numFrames)
 // Factory entry point (called by coreaudiod)
 // ---------------------------------------------------------------------------
 __attribute__((visibility("default")))
-void* VirtualMicDriverFactory(CFAllocatorRef allocator, CFUUIDRef requestedTypeUUID)
+void* PouetDriverFactory(CFAllocatorRef allocator, CFUUIDRef requestedTypeUUID)
 {
     (void)allocator;
     if (!CFEqual(requestedTypeUUID, kAudioServerPlugInTypeUUID)) return NULL;
-    sDriverLog = os_log_create("com.virtualmicdrv.driver", "audio");
+    sDriverLog = os_log_create("com.pouet.driver", "audio");
     pthread_mutex_init(&gDriver.stateLock, NULL);
     mach_timebase_info(&gDriver.tbInfo);
     gDriver.refCount = 1;
@@ -388,46 +388,46 @@ void* VirtualMicDriverFactory(CFAllocatorRef allocator, CFUUIDRef requestedTypeU
 // ---------------------------------------------------------------------------
 // COM boilerplate
 // ---------------------------------------------------------------------------
-static HRESULT VirtualMic_QueryInterface(void* inDriver, REFIID inUUID, LPVOID* outInterface)
+static HRESULT Pouet_QueryInterface(void* inDriver, REFIID inUUID, LPVOID* outInterface)
 {
     CFUUIDRef uuid = CFUUIDCreateFromUUIDBytes(NULL, inUUID);
     HRESULT result = E_NOINTERFACE;
     if (CFEqual(uuid, kAudioServerPlugInDriverInterfaceUUID) ||
         CFEqual(uuid, IUnknownUUID)) {
-        VirtualMic_AddRef(inDriver);
+        Pouet_AddRef(inDriver);
         *outInterface = inDriver;
         result = S_OK;
     }
     CFRelease(uuid);
     return result;
 }
-static ULONG VirtualMic_AddRef(void* inDriver)  { (void)inDriver; return (ULONG)__sync_add_and_fetch(&gDriver.refCount, 1); }
-static ULONG VirtualMic_Release(void* inDriver) { (void)inDriver; return (ULONG)__sync_sub_and_fetch(&gDriver.refCount, 1); }
+static ULONG Pouet_AddRef(void* inDriver)  { (void)inDriver; return (ULONG)__sync_add_and_fetch(&gDriver.refCount, 1); }
+static ULONG Pouet_Release(void* inDriver) { (void)inDriver; return (ULONG)__sync_sub_and_fetch(&gDriver.refCount, 1); }
 
 // ---------------------------------------------------------------------------
 // Initialization
 // ---------------------------------------------------------------------------
-static OSStatus VirtualMic_Initialize(AudioServerPlugInDriverRef inDriver, AudioServerPlugInHostRef inHost)
+static OSStatus Pouet_Initialize(AudioServerPlugInDriverRef inDriver, AudioServerPlugInHostRef inHost)
 {
     (void)inDriver;
     gDriver.host = inHost;
-    SHM_OpenNamed(&gDriver.mic, VIRTUALMICDRV_SHM_NAME);
-    SHM_OpenNamed(&gDriver.spk, VIRTUALSPEAKER_SHM_NAME);
+    SHM_OpenNamed(&gDriver.mic, POUET_SHM_NAME);
+    SHM_OpenNamed(&gDriver.spk, POUET_SPEAKER_SHM_NAME);
     return kAudioHardwareNoError;
 }
 
-static OSStatus VirtualMic_CreateDevice(AudioServerPlugInDriverRef d, CFDictionaryRef props,
+static OSStatus Pouet_CreateDevice(AudioServerPlugInDriverRef d, CFDictionaryRef props,
     const AudioServerPlugInClientInfo* ci, AudioObjectID* outDevID)
 { (void)d;(void)props;(void)ci; *outDevID = kAudioObjectUnknown; return kAudioHardwareUnsupportedOperationError; }
-static OSStatus VirtualMic_DestroyDevice(AudioServerPlugInDriverRef d, AudioObjectID id)
+static OSStatus Pouet_DestroyDevice(AudioServerPlugInDriverRef d, AudioObjectID id)
 { (void)d;(void)id; return kAudioHardwareUnsupportedOperationError; }
-static OSStatus VirtualMic_AddDeviceClient(AudioServerPlugInDriverRef d, AudioObjectID id, const AudioServerPlugInClientInfo* ci)
+static OSStatus Pouet_AddDeviceClient(AudioServerPlugInDriverRef d, AudioObjectID id, const AudioServerPlugInClientInfo* ci)
 { (void)d;(void)id;(void)ci; return kAudioHardwareNoError; }
-static OSStatus VirtualMic_RemoveDeviceClient(AudioServerPlugInDriverRef d, AudioObjectID id, const AudioServerPlugInClientInfo* ci)
+static OSStatus Pouet_RemoveDeviceClient(AudioServerPlugInDriverRef d, AudioObjectID id, const AudioServerPlugInClientInfo* ci)
 { (void)d;(void)id;(void)ci; return kAudioHardwareNoError; }
-static OSStatus VirtualMic_PerformDeviceConfigurationChange(AudioServerPlugInDriverRef d, AudioObjectID id, UInt64 action, void* data)
+static OSStatus Pouet_PerformDeviceConfigurationChange(AudioServerPlugInDriverRef d, AudioObjectID id, UInt64 action, void* data)
 { (void)d;(void)id;(void)action;(void)data; return kAudioHardwareNoError; }
-static OSStatus VirtualMic_AbortDeviceConfigurationChange(AudioServerPlugInDriverRef d, AudioObjectID id, UInt64 action, void* data)
+static OSStatus Pouet_AbortDeviceConfigurationChange(AudioServerPlugInDriverRef d, AudioObjectID id, UInt64 action, void* data)
 { (void)d;(void)id;(void)action;(void)data; return kAudioHardwareNoError; }
 
 // ---------------------------------------------------------------------------
@@ -440,7 +440,7 @@ static Boolean IsVolume(AudioObjectID id) { return id == kMicVolumeCtrlID || id 
 // ---------------------------------------------------------------------------
 // HasProperty
 // ---------------------------------------------------------------------------
-static Boolean VirtualMic_HasProperty(AudioServerPlugInDriverRef inDriver,
+static Boolean Pouet_HasProperty(AudioServerPlugInDriverRef inDriver,
     AudioObjectID inObjectID, pid_t inClientPID, const AudioObjectPropertyAddress* inAddress)
 {
     (void)inDriver; (void)inClientPID;
@@ -532,7 +532,7 @@ static Boolean VirtualMic_HasProperty(AudioServerPlugInDriverRef inDriver,
 // ---------------------------------------------------------------------------
 // IsPropertySettable
 // ---------------------------------------------------------------------------
-static OSStatus VirtualMic_IsPropertySettable(AudioServerPlugInDriverRef inDriver,
+static OSStatus Pouet_IsPropertySettable(AudioServerPlugInDriverRef inDriver,
     AudioObjectID inObjectID, pid_t inClientPID,
     const AudioObjectPropertyAddress* inAddress, Boolean* outIsSettable)
 {
@@ -563,7 +563,7 @@ static OSStatus VirtualMic_IsPropertySettable(AudioServerPlugInDriverRef inDrive
 // ---------------------------------------------------------------------------
 // GetPropertyDataSize
 // ---------------------------------------------------------------------------
-static OSStatus VirtualMic_GetPropertyDataSize(AudioServerPlugInDriverRef inDriver,
+static OSStatus Pouet_GetPropertyDataSize(AudioServerPlugInDriverRef inDriver,
     AudioObjectID inObjectID, pid_t inClientPID,
     const AudioObjectPropertyAddress* inAddress,
     UInt32 inQualifierDataSize, const void* inQualifierData, UInt32* outDataSize)
@@ -631,7 +631,7 @@ static OSStatus VirtualMic_GetPropertyDataSize(AudioServerPlugInDriverRef inDriv
             *outDataSize = sizeof(UInt32) * 2; return kAudioHardwareNoError;
         case kAudioDevicePropertyPreferredChannelLayout: {
             UInt32 sz = offsetof(AudioChannelLayout, mChannelDescriptions[0]) +
-                        VIRTUALMICDRV_NUM_CHANNELS * sizeof(AudioChannelDescription);
+                        POUET_NUM_CHANNELS * sizeof(AudioChannelDescription);
             *outDataSize = sz; return kAudioHardwareNoError;
         }
         }
@@ -696,9 +696,9 @@ static AudioStreamBasicDescription MakeASBD(Float64 rate)
                              kAudioFormatFlagsNativeEndian |
                              kAudioFormatFlagIsPacked;
     asbd.mBitsPerChannel   = 32;
-    asbd.mChannelsPerFrame = VIRTUALMICDRV_NUM_CHANNELS;
+    asbd.mChannelsPerFrame = POUET_NUM_CHANNELS;
     asbd.mFramesPerPacket  = 1;
-    asbd.mBytesPerFrame    = sizeof(float) * VIRTUALMICDRV_NUM_CHANNELS;
+    asbd.mBytesPerFrame    = sizeof(float) * POUET_NUM_CHANNELS;
     asbd.mBytesPerPacket   = asbd.mBytesPerFrame;
     return asbd;
 }
@@ -706,7 +706,7 @@ static AudioStreamBasicDescription MakeASBD(Float64 rate)
 // ---------------------------------------------------------------------------
 // GetPropertyData
 // ---------------------------------------------------------------------------
-static OSStatus VirtualMic_GetPropertyData(AudioServerPlugInDriverRef inDriver,
+static OSStatus Pouet_GetPropertyData(AudioServerPlugInDriverRef inDriver,
     AudioObjectID inObjectID, pid_t inClientPID,
     const AudioObjectPropertyAddress* inAddress,
     UInt32 inQualDataSize, const void* inQualData,
@@ -732,11 +732,11 @@ static OSStatus VirtualMic_GetPropertyData(AudioServerPlugInDriverRef inDriver,
             return kAudioHardwareNoError;
         case kAudioObjectPropertyName:
             *outDataSize = sizeof(CFStringRef);
-            *(CFStringRef*)outData = CFStringCreateWithCString(NULL, "VirtualMic Plugin", kCFStringEncodingUTF8);
+            *(CFStringRef*)outData = CFStringCreateWithCString(NULL, "Pouet Plugin", kCFStringEncodingUTF8);
             return kAudioHardwareNoError;
         case kAudioObjectPropertyManufacturer:
             *outDataSize = sizeof(CFStringRef);
-            *(CFStringRef*)outData = CFStringCreateWithCString(NULL, "VirtualMic", kCFStringEncodingUTF8);
+            *(CFStringRef*)outData = CFStringCreateWithCString(NULL, "Pouet", kCFStringEncodingUTF8);
             return kAudioHardwareNoError;
         case kAudioPlugInPropertyDeviceList: {
             AudioObjectID* ids = (AudioObjectID*)outData;
@@ -753,9 +753,9 @@ static OSStatus VirtualMic_GetPropertyData(AudioServerPlugInDriverRef inDriver,
             CFStringRef uid = (inQualDataSize >= sizeof(CFStringRef)) ? *(CFStringRef*)inQualData : NULL;
             AudioObjectID result = kAudioObjectUnknown;
             if (uid) {
-                if (CFStringCompare(uid, CFSTR("VirtualMic-UID-001"), 0) == kCFCompareEqualTo)
+                if (CFStringCompare(uid, CFSTR("Pouet-UID-001"), 0) == kCFCompareEqualTo)
                     result = kMicDeviceID;
-                else if (CFStringCompare(uid, CFSTR("VirtualSpeaker-UID-001"), 0) == kCFCompareEqualTo)
+                else if (CFStringCompare(uid, CFSTR("PouetSpeaker-UID-001"), 0) == kCFCompareEqualTo)
                     result = kSpkDeviceID;
             }
             *outDataSize = sizeof(AudioObjectID);
@@ -785,7 +785,7 @@ static OSStatus VirtualMic_GetPropertyData(AudioServerPlugInDriverRef inDriver,
             *(CFStringRef*)outData = CFStringCreateWithCString(NULL, desc->name, kCFStringEncodingUTF8);
             *outDataSize = sizeof(CFStringRef); return kAudioHardwareNoError;
         case kAudioObjectPropertyManufacturer:
-            *(CFStringRef*)outData = CFStringCreateWithCString(NULL, "VirtualMic", kCFStringEncodingUTF8);
+            *(CFStringRef*)outData = CFStringCreateWithCString(NULL, "Pouet", kCFStringEncodingUTF8);
             *outDataSize = sizeof(CFStringRef); return kAudioHardwareNoError;
         case kAudioDevicePropertyDeviceUID:
             *(CFStringRef*)outData = CFStringCreateWithCString(NULL, desc->uid, kCFStringEncodingUTF8);
@@ -818,13 +818,13 @@ static OSStatus VirtualMic_GetPropertyData(AudioServerPlugInDriverRef inDriver,
             *(UInt32*)outData = 0;
             *outDataSize = sizeof(UInt32); return kAudioHardwareNoError;
         case kAudioDevicePropertySafetyOffset:
-            *(UInt32*)outData = VIRTUALMICDRV_SAFETY_OFFSET;
+            *(UInt32*)outData = POUET_SAFETY_OFFSET;
             *outDataSize = sizeof(UInt32); return kAudioHardwareNoError;
         case kAudioDevicePropertyIsHidden:
             *(UInt32*)outData = 0;
             *outDataSize = sizeof(UInt32); return kAudioHardwareNoError;
         case kAudioDevicePropertyZeroTimeStampPeriod:
-            *(UInt32*)outData = VIRTUALMICDRV_BUFFER_FRAMES;
+            *(UInt32*)outData = POUET_BUFFER_FRAMES;
             *outDataSize = sizeof(UInt32); return kAudioHardwareNoError;
         case kAudioDevicePropertyStreams: {
             AudioObjectPropertyScope streamScope =
@@ -989,7 +989,7 @@ static OSStatus VirtualMic_GetPropertyData(AudioServerPlugInDriverRef inDriver,
 // ---------------------------------------------------------------------------
 // SetPropertyData
 // ---------------------------------------------------------------------------
-static OSStatus VirtualMic_SetPropertyData(AudioServerPlugInDriverRef inDriver,
+static OSStatus Pouet_SetPropertyData(AudioServerPlugInDriverRef inDriver,
     AudioObjectID inObjectID, pid_t inClientPID,
     const AudioObjectPropertyAddress* inAddress,
     UInt32 inQualDataSize, const void* inQualData,
@@ -1043,7 +1043,7 @@ static OSStatus VirtualMic_SetPropertyData(AudioServerPlugInDriverRef inDriver,
 // ---------------------------------------------------------------------------
 // I/O lifecycle
 // ---------------------------------------------------------------------------
-static OSStatus VirtualMic_StartIO(AudioServerPlugInDriverRef inDriver,
+static OSStatus Pouet_StartIO(AudioServerPlugInDriverRef inDriver,
     AudioObjectID inDeviceObjectID, UInt32 inClientID)
 {
     (void)inDriver; (void)inClientID;
@@ -1062,7 +1062,7 @@ static OSStatus VirtualMic_StartIO(AudioServerPlugInDriverRef inDriver,
     return kAudioHardwareNoError;
 }
 
-static OSStatus VirtualMic_StopIO(AudioServerPlugInDriverRef inDriver,
+static OSStatus Pouet_StopIO(AudioServerPlugInDriverRef inDriver,
     AudioObjectID inDeviceObjectID, UInt32 inClientID)
 {
     (void)inDriver; (void)inClientID;
@@ -1078,7 +1078,7 @@ static OSStatus VirtualMic_StopIO(AudioServerPlugInDriverRef inDriver,
 // ---------------------------------------------------------------------------
 // Zero timestamp — drives the HAL clock
 // ---------------------------------------------------------------------------
-static OSStatus VirtualMic_GetZeroTimeStamp(AudioServerPlugInDriverRef inDriver,
+static OSStatus Pouet_GetZeroTimeStamp(AudioServerPlugInDriverRef inDriver,
     AudioObjectID inDeviceObjectID, UInt32 inClientID,
     Float64* outSampleTime, UInt64* outHostTime, UInt64* outSeed)
 {
@@ -1094,7 +1094,7 @@ static OSStatus VirtualMic_GetZeroTimeStamp(AudioServerPlugInDriverRef inDriver,
     double elapsedNs = (double)elapsed * (double)gDriver.tbInfo.numer / (double)gDriver.tbInfo.denom;
     uint64_t elapsedFrames = (uint64_t)(elapsedNs * sr / 1e9);
 
-    uint64_t period = VIRTUALMICDRV_BUFFER_FRAMES;
+    uint64_t period = POUET_BUFFER_FRAMES;
     uint64_t currentPeriod = elapsedFrames / period;
 
     *outSampleTime = (Float64)(currentPeriod * period);
@@ -1111,7 +1111,7 @@ static OSStatus VirtualMic_GetZeroTimeStamp(AudioServerPlugInDriverRef inDriver,
 // ---------------------------------------------------------------------------
 // I/O operations
 // ---------------------------------------------------------------------------
-static OSStatus VirtualMic_WillDoIOOperation(AudioServerPlugInDriverRef inDriver,
+static OSStatus Pouet_WillDoIOOperation(AudioServerPlugInDriverRef inDriver,
     AudioObjectID inDeviceObjectID, UInt32 inClientID,
     UInt32 inOperationID, Boolean* outWillDo, Boolean* outWillDoInPlace)
 {
@@ -1128,14 +1128,14 @@ static OSStatus VirtualMic_WillDoIOOperation(AudioServerPlugInDriverRef inDriver
     return kAudioHardwareNoError;
 }
 
-static OSStatus VirtualMic_BeginIOOperation(AudioServerPlugInDriverRef inDriver,
+static OSStatus Pouet_BeginIOOperation(AudioServerPlugInDriverRef inDriver,
     AudioObjectID inDeviceObjectID, UInt32 inClientID,
     UInt32 inOperationID, UInt32 inIOBufferFrameSize,
     const AudioServerPlugInIOCycleInfo* inIOCycleInfo)
 { (void)inDriver;(void)inDeviceObjectID;(void)inClientID;(void)inOperationID;
   (void)inIOBufferFrameSize;(void)inIOCycleInfo; return kAudioHardwareNoError; }
 
-static OSStatus VirtualMic_DoIOOperation(AudioServerPlugInDriverRef inDriver,
+static OSStatus Pouet_DoIOOperation(AudioServerPlugInDriverRef inDriver,
     AudioObjectID inDeviceObjectID, AudioObjectID inStreamObjectID,
     UInt32 inClientID, UInt32 inOperationID, UInt32 inIOBufferFrameSize,
     const AudioServerPlugInIOCycleInfo* inIOCycleInfo,
@@ -1155,7 +1155,7 @@ static OSStatus VirtualMic_DoIOOperation(AudioServerPlugInDriverRef inDriver,
     return kAudioHardwareNoError;
 }
 
-static OSStatus VirtualMic_EndIOOperation(AudioServerPlugInDriverRef inDriver,
+static OSStatus Pouet_EndIOOperation(AudioServerPlugInDriverRef inDriver,
     AudioObjectID inDeviceObjectID, UInt32 inClientID,
     UInt32 inOperationID, UInt32 inIOBufferFrameSize,
     const AudioServerPlugInIOCycleInfo* inIOCycleInfo)

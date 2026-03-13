@@ -1,4 +1,4 @@
-// tone_injector.c — Writes test signals to VirtualMic SHM for automated testing.
+// tone_injector.c — Writes test signals to Pouet SHM for automated testing.
 // Supports multiple modes to test different audio paths.
 //
 // Usage: ./tone_injector <duration_seconds> <mode>
@@ -20,7 +20,7 @@
 #include <fcntl.h>
 #include <time.h>
 
-#define SHM_NAME       "/VirtualMicAudio"
+#define SHM_NAME       "/PouetAudio"
 #define SAMPLE_RATE    48000
 #define NUM_CHANNELS   2
 #define CHUNK_FRAMES   512
@@ -39,15 +39,15 @@ typedef struct {
     uint32_t         capacity;
     uint32_t         _pad;
     float            data[];
-} VirtualMicSHM;
+} PouetSHM;
 
 enum Mode { MODE_MIC, MODE_INJECT, MODE_MIX, MODE_SILENCE, MODE_SWEEP };
 
 static volatile int running = 1;
 static void sighandler(int sig) { (void)sig; running = 0; }
 
-static VirtualMicSHM* open_shm(const char* name) {
-    size_t total = sizeof(VirtualMicSHM) + SHM_DATA_SIZE;
+static PouetSHM* open_shm(const char* name) {
+    size_t total = sizeof(PouetSHM) + SHM_DATA_SIZE;
     int fd = shm_open(name, O_RDWR, 0666);
     if (fd < 0) {
         fd = shm_open(name, O_RDWR | O_CREAT, 0666);
@@ -57,7 +57,7 @@ static VirtualMicSHM* open_shm(const char* name) {
     void* mem = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
     if (mem == MAP_FAILED) { perror("mmap"); return NULL; }
-    VirtualMicSHM* shm = (VirtualMicSHM*)mem;
+    PouetSHM* shm = (PouetSHM*)mem;
     shm->capacity = SHM_DATA_SIZE / sizeof(float);
     atomic_store_explicit(&shm->writePos, 0, memory_order_release);
     atomic_store_explicit(&shm->readPos, 0, memory_order_release);
@@ -108,7 +108,7 @@ int main(int argc, char** argv) {
     signal(SIGINT, sighandler);
     signal(SIGTERM, sighandler);
 
-    VirtualMicSHM* shm = open_shm(SHM_NAME);
+    PouetSHM* shm = open_shm(SHM_NAME);
     if (!shm) return 1;
 
     fprintf(stderr, "tone_injector: mode=%s duration=%ds\n", modeNames[mode], duration);
@@ -147,6 +147,6 @@ int main(int argc, char** argv) {
     }
 
     fprintf(stderr, "tone_injector: done (%llu frames)\n", totalFramesWritten);
-    munmap(shm, sizeof(VirtualMicSHM) + SHM_DATA_SIZE);
+    munmap(shm, sizeof(PouetSHM) + SHM_DATA_SIZE);
     return 0;
 }

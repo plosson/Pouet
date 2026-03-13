@@ -1,0 +1,27 @@
+{
+  "name": "pouet",
+  "version": "1.0.0",
+  "description": "A minimal, production-ready **Audio Server Plugin** that creates a virtual microphone on macOS. Proxy a real mic through it and inject any MP3, AAC, WAV, or FLAC file — it appears as a real mic input to every app on your Mac.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/plosson/Pouet.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/plosson/Pouet/issues"
+  },
+  "homepage": "https://github.com/plosson/Pouet#readme",
+  "dependencies": {
+    "playwright": "^1.58.2"
+  }
+}

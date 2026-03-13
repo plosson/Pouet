@@ -1,4 +1,4 @@
-# VirtualMic
+# Pouet
 
 macOS virtual microphone driver (C Audio Server Plugin) + companion Swift app. Proxies a real mic through shared memory, allows audio injection from soundboard files.
 

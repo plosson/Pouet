@@ -1,4 +1,4 @@
-# Makefile — VirtualMic Audio Server Plugin + companion app
+# Makefile — Pouet Audio Server Plugin + companion app
 #
 # Requirements:
 #   - macOS 12+ SDK (Xcode Command Line Tools)
@@ -13,24 +13,24 @@
 #   make uninstall        # remove driver
 #   make clean
 
-BUNDLE_ID     = com.virtualmicdrv.driver
+BUNDLE_ID     = com.pouet.driver
 VERSION       = $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "0.0.0")
 
 # ---- Paths ----
-DRIVER_SRC    = Driver/VirtualMicDriver.c
-DRIVER_BUNDLE = build/VirtualMic.driver
-DRIVER_BINARY = $(DRIVER_BUNDLE)/Contents/MacOS/VirtualMicDriver
-DRIVER_PLIST  = Driver/VirtualMic.driver/Contents/Info.plist
+DRIVER_SRC    = Driver/PouetDriver.c
+DRIVER_BUNDLE = build/Pouet.driver
+DRIVER_BINARY = $(DRIVER_BUNDLE)/Contents/MacOS/PouetDriver
+DRIVER_PLIST  = Driver/Pouet.driver/Contents/Info.plist
 
-GUI_SRC       = App/VirtualMicGUI.swift App/Log.swift App/AppService.swift App/AudioService.swift App/AudioMixing.swift App/ContentView.swift
-GUI_BUNDLE    = build/VirtualMic.app
-GUI_BINARY    = $(GUI_BUNDLE)/Contents/MacOS/VirtualMic
-GUI_BUNDLE_ID = com.virtualmicdrv.gui
+GUI_SRC       = App/PouetGUI.swift App/Log.swift App/AppService.swift App/AudioService.swift App/AudioMixing.swift App/ContentView.swift
+GUI_BUNDLE    = build/Pouet.app
+GUI_BINARY    = $(GUI_BUNDLE)/Contents/MacOS/Pouet
+GUI_BUNDLE_ID = com.pouet.gui
 
-UNINSTALLER   = build/Uninstall VirtualMic.app
+UNINSTALLER   = build/Uninstall Pouet.app
 
 PKG_ROOT      = build/pkg_root
-PKG_OUT       = build/VirtualMic-$(VERSION).pkg
+PKG_OUT       = build/Pouet-$(VERSION).pkg
 
 HAL_DIR       = /Library/Audio/Plug-Ins/HAL
 
@@ -65,7 +65,7 @@ $(DRIVER_BINARY): $(DRIVER_SRC) $(DRIVER_PLIST)
 	@mkdir -p $(DRIVER_BUNDLE)/Contents/Resources
 	$(CC) $(CFLAGS) \
 	    -dynamiclib \
-	    -install_name "@rpath/VirtualMicDriver" \
+	    -install_name "@rpath/PouetDriver" \
 	    -exported_symbols_list Driver/exports.lds \
 	    -o $(DRIVER_BINARY) \
 	    $(DRIVER_SRC)
@@ -78,7 +78,7 @@ $(DRIVER_BINARY): $(DRIVER_SRC) $(DRIVER_PLIST)
 gui: $(GUI_BINARY)
 
 $(GUI_BINARY): $(GUI_SRC) $(DRIVER_BINARY)
-	@killall VirtualMic 2>/dev/null || true
+	@killall Pouet 2>/dev/null || true
 	@sleep 0.5
 	@mkdir -p $(GUI_BUNDLE)/Contents/MacOS
 	@mkdir -p $(GUI_BUNDLE)/Contents/Resources
@@ -94,7 +94,7 @@ $(GUI_BINARY): $(GUI_SRC) $(DRIVER_BINARY)
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" $(GUI_BUNDLE)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(VERSION)" $(GUI_BUNDLE)/Contents/Info.plist
 	@cp App/AppIcon.icns $(GUI_BUNDLE)/Contents/Resources/AppIcon.icns
-	@cp -R $(DRIVER_BUNDLE) $(GUI_BUNDLE)/Contents/Resources/VirtualMic.driver
+	@cp -R $(DRIVER_BUNDLE) $(GUI_BUNDLE)/Contents/Resources/Pouet.driver
 	codesign --force --sign - --entitlements App/entitlements.plist $(GUI_BUNDLE)
 	@echo "✓ GUI app built → $(GUI_BUNDLE)"
 
@@ -119,7 +119,7 @@ sign: all
 	codesign --force --options runtime \
 	    --sign "$(DEVID)" \
 	    --identifier $(BUNDLE_ID) \
-	    $(GUI_BUNDLE)/Contents/Resources/VirtualMic.driver
+	    $(GUI_BUNDLE)/Contents/Resources/Pouet.driver
 	codesign --force --options runtime \
 	    --sign "$(DEVID)" \
 	    --identifier $(GUI_BUNDLE_ID) \
@@ -127,15 +127,15 @@ sign: all
 	    $(GUI_BUNDLE)
 	codesign --force --options runtime \
 	    --sign "$(DEVID)" \
-	    --identifier com.virtualmicdrv.uninstaller \
+	    --identifier com.pouet.uninstaller \
 	    "$(UNINSTALLER)"
 	@echo "✓ Signed"
 
 # ---- Notarize (fill in your Apple ID + app-specific password) ----
 notarize: sign
 	@echo "Zipping for notarization …"
-	ditto -c -k --keepParent $(DRIVER_BUNDLE) build/VirtualMic_driver.zip
-	xcrun notarytool submit build/VirtualMic_driver.zip \
+	ditto -c -k --keepParent $(DRIVER_BUNDLE) build/Pouet_driver.zip
+	xcrun notarytool submit build/Pouet_driver.zip \
 	    --apple-id "$$APPLE_ID" \
 	    --password "$$APPLE_APP_PASSWORD" \
 	    --team-id "$$TEAM_ID" \
@@ -156,7 +156,7 @@ pkg: sign
 	    --identifier $(BUNDLE_ID) \
 	    --version $(VERSION) \
 	    --scripts Installer/scripts \
-	    build/VirtualMic_component.pkg
+	    build/Pouet_component.pkg
 	@sed 's/version="1.0.0"/version="$(VERSION)"/' Installer/distribution.xml > build/distribution.xml
 	productbuild \
 	    --distribution build/distribution.xml \
@@ -168,18 +168,18 @@ pkg: sign
 # ---- Local install for testing ----
 install: driver gui
 	sudo mkdir -p $(HAL_DIR)
-	sudo rm -rf $(HAL_DIR)/VirtualMic.driver
+	sudo rm -rf $(HAL_DIR)/Pouet.driver
 	sudo cp -R $(DRIVER_BUNDLE) $(HAL_DIR)/
-	sudo chown -R root:wheel $(HAL_DIR)/VirtualMic.driver
+	sudo chown -R root:wheel $(HAL_DIR)/Pouet.driver
 	sudo killall -9 coreaudiod 2>/dev/null || true
 	@sleep 2
 	@echo "✓ Installed. Virtual mic should appear in Sound settings."
 
 uninstall:
-	sudo rm -rf $(HAL_DIR)/VirtualMic.driver
+	sudo rm -rf $(HAL_DIR)/Pouet.driver
 	sudo killall -9 coreaudiod 2>/dev/null || true
 	@sleep 2
-	@echo "✓ Uninstalled. VirtualMic driver removed."
+	@echo "✓ Uninstalled. Pouet driver removed."
 
 # ---- Tests ----
 test: test-c test-swift

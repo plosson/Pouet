@@ -50,7 +50,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set +e
-          xcrun notarytool submit build/VirtualMic-*.pkg \
+          xcrun notarytool submit build/Pouet-*.pkg \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
@@ -70,17 +70,17 @@ jobs:
             fi
             exit 1
           fi
-          xcrun stapler staple build/VirtualMic-*.pkg
+          xcrun stapler staple build/Pouet-*.pkg
 
       - name: Upload artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: VirtualMic-pkg
-          path: build/VirtualMic-*.pkg
+          name: Pouet-pkg
+          path: build/Pouet-*.pkg
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: build/VirtualMic-*.pkg
+          files: build/Pouet-*.pkg

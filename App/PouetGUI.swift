@@ -14,7 +14,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @main
-struct VirtualMicGUI: App {
+struct PouetGUI: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var app = AppService()
 
@@ -32,7 +32,7 @@ struct VirtualMicGUI: App {
         .windowResizability(.contentSize)
         .commands {
             CommandGroup(after: .appInfo) {
-                Button("Uninstall VirtualMic...") {
+                Button("Uninstall Pouet...") {
                     NotificationCenter.default.post(name: .requestUninstall, object: nil)
                 }
             }

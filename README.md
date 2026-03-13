@@ -1,4 +1,4 @@
-# VirtualMic — macOS Virtual Microphone Driver
+# Pouet — macOS Virtual Microphone Driver
 
 A minimal, production-ready **Audio Server Plugin** that creates a virtual
 microphone on macOS. Proxy a real mic through it and inject any MP3, AAC, WAV,
@@ -6,18 +6,18 @@ or FLAC file — it appears as a real mic input to every app on your Mac.
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  VirtualMic.app (GUI)                                │
+│  Pouet.app (GUI)                                │
 │  • Proxies a real mic through the virtual device     │
 │  • Decodes MP3/AAC/WAV via AVFoundation              │
 │  • Resamples to 48 kHz stereo Float32                │
 │  • Writes into shared memory ring buffer ──────────► │──┐
-└──────────────────────────────────────────────────────┘  │  /VirtualMicAudio
+└──────────────────────────────────────────────────────┘  │  /PouetAudio
                                                           │  (POSIX shm)
 ┌──────────────────────────────────────────────────────┐  │
-│  VirtualMic.driver (inside coreaudiod)               │  │
+│  Pouet.driver (inside coreaudiod)               │  │
 │  • Audio Server Plugin (no kext, no SIP changes)     │◄─┘
 │  • DoIOOperation reads ring buffer → HAL             │
-│  • Appears as "VirtualMic" mic in System Settings    │
+│  • Appears as "Pouet" mic in System Settings    │
 └──────────────────────────────────────────────────────┘
          ↓
    Zoom / Discord / FaceTime / any CoreAudio app
@@ -27,7 +27,7 @@ or FLAC file — it appears as a real mic input to every app on your Mac.
 
 | Component | Language | What it does |
 |-----------|----------|--------------|
-| `VirtualMicDriver.c` | C | Audio Server Plugin — implements the 23-function HAL vtable, reads from shared memory on the real-time audio thread |
+| `PouetDriver.c` | C | Audio Server Plugin — implements the 23-function HAL vtable, reads from shared memory on the real-time audio thread |
 | `App/` | Swift | GUI app — mic proxy, soundboard, audio injection, settings |
 | `SharedMemory.h` | C | Shared ring-buffer layout (included by both) |
 | `Installer/` | pkg | One-click `.pkg` installer with postinstall script |
@@ -42,7 +42,7 @@ or FLAC file — it appears as a real mic input to every app on your Mac.
 
 ```bash
 # Clone / open the project folder
-cd VirtualMicDriver
+cd PouetDriver
 
 # Build driver bundle + GUI app (unsigned, for local testing)
 make
@@ -67,9 +67,9 @@ If macOS shows "not from identified developer", go to:
 
 ## Usage
 
-1. Open **VirtualMic** from your Applications folder
+1. Open **Pouet** from your Applications folder
 2. Select a real microphone to proxy through the virtual device
-3. In any app (Zoom, Discord, FaceTime), select **VirtualMic** as your input
+3. In any app (Zoom, Discord, FaceTime), select **Pouet** as your input
 4. Use the Sounds tab to inject audio through the virtual mic
 
 ## Supported audio formats
@@ -80,14 +80,14 @@ before writing to the ring buffer.
 
 ## How it works in detail
 
-### Driver side (`VirtualMicDriver.c`)
+### Driver side (`PouetDriver.c`)
 
-1. `VirtualMicDriverFactory()` is the bundle entry point — `coreaudiod` calls
+1. `PouetDriverFactory()` is the bundle entry point — `coreaudiod` calls
    it when it discovers the `.driver` bundle in `/Library/Audio/Plug-Ins/HAL/`.
 2. The driver returns a COM-style vtable (`AudioServerPlugInDriverInterface`)
    with 23 function pointers.
 3. On `StartIO`, the driver opens (or creates) the POSIX shared memory region
-   `/VirtualMicAudio` and anchors the HAL clock.
+   `/PouetAudio` and anchors the HAL clock.
 4. On every `DoIOOperation(ReadInput)` callback (real-time thread, ~512 frames
    @ 48 kHz ≈ every 10.7 ms), it reads from the lock-free ring buffer and
    fills the HAL's output buffer. If the ring is empty, silence is output.
@@ -119,19 +119,19 @@ available samples. No mutex is needed — one producer, one consumer, atomic ops
 
 ## Signing & distribution checklist
 
-- [ ] Create App ID `com.virtualmicdrv.driver` in Apple Developer portal
+- [ ] Create App ID `com.pouet.driver` in Apple Developer portal
 - [ ] Download **Developer ID Application** certificate
 - [ ] Download **Developer ID Installer** certificate
 - [ ] Run `make pkg` with correct `DEVID` / `INSTALLER_ID`
 - [ ] Run `make notarize` (set `APPLE_ID`, `APPLE_APP_PASSWORD`, `TEAM_ID`)
-- [ ] Distribute `build/VirtualMic-1.0.0.pkg`
+- [ ] Distribute `build/Pouet-1.0.0.pkg`
 
 ## Uninstall
 
 ```bash
 make uninstall
 # or manually:
-sudo rm -rf /Library/Audio/Plug-Ins/HAL/VirtualMic.driver
+sudo rm -rf /Library/Audio/Plug-Ins/HAL/Pouet.driver
 sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod
 ```
 

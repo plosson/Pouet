@@ -4,9 +4,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.virtualmicdrv.driver</string>
+    <string>com.pouet.driver</string>
     <key>CFBundleName</key>
-    <string>VirtualMic</string>
+    <string>Pouet</string>
     <key>CFBundleVersion</key>
     <string>1.0.0</string>
     <key>CFBundleShortVersionString</key>
@@ -14,7 +14,7 @@
     <key>CFBundlePackageType</key>
     <string>BNDL</string>
     <key>CFBundleExecutable</key>
-    <string>VirtualMicDriver</string>
+    <string>PouetDriver</string>
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleSupportedPlatforms</key>
@@ -26,7 +26,7 @@
     <key>CFPlugInFactories</key>
     <dict>
         <key>A4B3C2D1-E5F6-7890-ABCD-EF1234567890</key>
-        <string>VirtualMicDriverFactory</string>
+        <string>PouetDriverFactory</string>
     </dict>
 
     <!-- CFPlugInTypes: maps kAudioServerPlugInTypeUUID to our factory -->

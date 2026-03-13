@@ -4,8 +4,8 @@
 
 set -e
 
-# Kill VirtualMic app if running (old binary would hold stale SHM mappings)
-killall VirtualMic 2>/dev/null || true
+# Kill Pouet app if running (old binary would hold stale SHM mappings)
+killall Pouet 2>/dev/null || true
 
 # Give it a moment to release resources
 sleep 1

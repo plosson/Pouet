@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>VirtualMic Audio Driver</title>
+    <title>Pouet Audio Driver</title>
     <welcome    file="Welcome.html" mime-type="text/html"/>
     <license    file="License.txt"  mime-type="text/plain"/>
     <conclusion file="Conclusion.html" mime-type="text/html"/>
@@ -8,17 +8,17 @@
     <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
 
     <choices-outline>
-        <line choice="com.virtualmicdrv.driver.choice"/>
+        <line choice="com.pouet.driver.choice"/>
     </choices-outline>
 
-    <choice id="com.virtualmicdrv.driver.choice"
+    <choice id="com.pouet.driver.choice"
             visible="false"
-            title="VirtualMic Driver"
-            description="Installs the VirtualMic Audio Server Plugin and app.">
-        <pkg-ref id="com.virtualmicdrv.driver"/>
+            title="Pouet Driver"
+            description="Installs the Pouet Audio Server Plugin and app.">
+        <pkg-ref id="com.pouet.driver"/>
     </choice>
 
-    <pkg-ref id="com.virtualmicdrv.driver"
+    <pkg-ref id="com.pouet.driver"
              version="1.0.0"
-             onConclusion="none">VirtualMic_component.pkg</pkg-ref>
+             onConclusion="none">Pouet_component.pkg</pkg-ref>
 </installer-gui-script>

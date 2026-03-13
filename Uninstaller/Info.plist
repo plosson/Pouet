@@ -7,13 +7,13 @@
     <key>CFBundleExecutable</key>
     <string>uninstall.sh</string>
     <key>CFBundleIdentifier</key>
-    <string>com.virtualmicdrv.uninstaller</string>
+    <string>com.pouet.uninstaller</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>Uninstall VirtualMic</string>
+    <string>Uninstall Pouet</string>
     <key>CFBundleDisplayName</key>
-    <string>Uninstall VirtualMic</string>
+    <string>Uninstall Pouet</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
