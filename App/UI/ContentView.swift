@@ -10,6 +10,9 @@ private enum Theme {
     static let border     = Color(red: 0.12, green: 0.16, blue: 0.23)   // dark slate #1E293B
     static let accent     = Color(red: 0.00, green: 0.78, blue: 0.65)   // teal mint
     static let purple     = Color(red: 0.38, green: 0.36, blue: 0.90)   // indigo
+    static let violet     = Color(red: 0.55, green: 0.36, blue: 0.96)   // #8B5CF6 vivid violet
+    static let pink       = Color(red: 0.96, green: 0.45, blue: 0.71)   // #F472B6 hot pink
+    static let amber      = Color(red: 0.98, green: 0.75, blue: 0.14)   // #FBBF24 amber
     static let coral      = Color(red: 1.0, green: 0.45, blue: 0.42)    // warm red/coral
     static let dimText    = Color(red: 0.40, green: 0.45, blue: 0.53)   // slate-500
     static let bodyText   = Color(red: 0.12, green: 0.16, blue: 0.23)   // slate-800
@@ -29,6 +32,57 @@ private enum Theme {
     static let cornerR: CGFloat = 20
 }
 
+// MARK: - App Card Model
+
+private struct AppCard: Identifiable {
+    let id: String
+    let name: String
+    let description: String
+    let icon: String
+    let previewColor: Color
+    let accentColor: Color
+    let enabled: Bool
+}
+
+private let appCards: [AppCard] = [
+    AppCard(
+        id: "studio",
+        name: "Studio",
+        description: "Virtual mic proxy with audio injection, dashcam snapshots, and video capture.",
+        icon: "waveform.circle.fill",
+        previewColor: Color(red: 0.83, green: 0.95, blue: 0.93),  // mint pastel
+        accentColor: Theme.accent,
+        enabled: true
+    ),
+    AppCard(
+        id: "bubblesnap",
+        name: "BubbleSnap",
+        description: "Add speech bubbles to screenshots. Roast your friends in style.",
+        icon: "bubble.left.and.bubble.right.fill",
+        previewColor: Color(red: 0.99, green: 0.89, blue: 0.93),  // pink pastel #fce4ec
+        accentColor: Theme.pink,
+        enabled: false
+    ),
+    AppCard(
+        id: "facegif",
+        name: "FaceGIF",
+        description: "Swap any face onto any GIF. Chaotic. Beautiful. Unhinged.",
+        icon: "face.smiling.fill",
+        previewColor: Color(red: 0.93, green: 0.91, blue: 0.99),  // violet pastel #ede9fe
+        accentColor: Theme.violet,
+        enabled: false
+    ),
+    AppCard(
+        id: "headcut",
+        name: "HeadCut",
+        description: "Isolate heads from photos as transparent PNGs. No Photoshop needed.",
+        icon: "scissors",
+        previewColor: Color(red: 1.0, green: 0.95, blue: 0.85),   // amber pastel #fef3c7
+        accentColor: Theme.amber,
+        enabled: false
+    ),
+]
+
 // MARK: - Main View
 
 struct ContentView: View {
@@ -36,44 +90,21 @@ struct ContentView: View {
     @ObservedObject var video: VideoService
 
     @State private var toast: String?
+    @State private var currentApp: String? = nil
     @State private var selectedTab = 0
     @State private var showUninstallConfirm = false
     @State private var soundFilterText = ""
     @State private var recPulse = false
+    @State private var cardHover: String? = nil
 
     var body: some View {
         ZStack(alignment: .bottom) {
             Theme.bg.ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                headerBar
-                    .padding(.horizontal, 20)
-                    .padding(.top, 12)
-                    .padding(.bottom, 8)
-
-                tabBar
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 12)
-
-                ScrollView {
-                    Group {
-                        switch selectedTab {
-                        case 0: controlCenterTab
-                        case 1: libraryTab
-                        case 2: settingsTab
-                        default: controlCenterTab
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 4)
-                    .padding(.bottom, 20)
-                }
-
-                if selectedTab == 0 {
-                    levelsFooter
-                }
-
-                versionBar
+            if currentApp == nil {
+                homeScreen
+            } else {
+                studioView
             }
 
             if let msg = toast {
@@ -96,10 +127,258 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Header
+    // MARK: - Home Screen
 
-    private var headerBar: some View {
+    private var homeScreen: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Hero
+                    VStack(spacing: 12) {
+                        Spacer().frame(height: 16)
+
+                        // Badge
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(Theme.accent)
+                                .frame(width: 8, height: 8)
+                            Text("CREATIVE SUITE")
+                                .font(.system(size: 9, weight: .heavy))
+                                .tracking(1.5)
+                                .foregroundColor(.white)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(Theme.border)
+                        .cornerRadius(20)
+
+                        // Title
+                        (Text("Stupid little ")
+                            .font(.system(size: 28, weight: .heavy))
+                            .foregroundColor(Theme.bodyText)
+                        + Text("tools")
+                            .font(.system(size: 28, weight: .heavy))
+                            .foregroundColor(Theme.violet)
+                        + Text(" for stupid little things")
+                            .font(.system(size: 28, weight: .heavy))
+                            .foregroundColor(Theme.bodyText)
+                        )
+                        .multilineTextAlignment(.center)
+                        .tracking(-0.5)
+                        .padding(.horizontal, 20)
+
+                        // Subtitle
+                        Text("A collection of fun desktop tools. No installs, no signups. Just vibes.")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(Theme.dimText)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 40)
+
+                        // Squiggle divider
+                        squiggleDivider
+                            .padding(.top, 4)
+                    }
+
+                    // App cards grid — 2 columns
+                    LazyVGrid(columns: [
+                        GridItem(.flexible(), spacing: 16),
+                        GridItem(.flexible(), spacing: 16),
+                    ], spacing: 16) {
+                        ForEach(appCards) { appCard in
+                            homeAppCard(appCard)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+
+                    // Footer
+                    Text("More stupid tools coming soon.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(Theme.dimText)
+                        .padding(.bottom, 20)
+                }
+            }
+
+            versionBar
+        }
+    }
+
+    private func homeAppCard(_ appCard: AppCard) -> some View {
+        let isHovered = cardHover == appCard.id
+        return Button {
+            if appCard.enabled {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    currentApp = appCard.id
+                }
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                // Preview area
+                ZStack {
+                    appCard.previewColor
+
+                    Image(systemName: appCard.icon)
+                        .font(.system(size: 36, weight: .bold))
+                        .foregroundColor(appCard.accentColor.opacity(0.5))
+                }
+                .frame(height: 120)
+                .frame(maxWidth: .infinity)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(Theme.border)
+                        .frame(height: Theme.borderW)
+                }
+
+                // Content
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(appCard.name)
+                        .font(.system(size: 16, weight: .heavy))
+                        .foregroundColor(Theme.bodyText)
+                        .tracking(-0.3)
+
+                    Text(appCard.description)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(Theme.dimText)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Spacer(minLength: 8)
+
+                    // Bottom row
+                    HStack {
+                        if appCard.enabled {
+                            Text("OPEN")
+                                .font(.system(size: 10, weight: .heavy))
+                                .tracking(1)
+                                .foregroundColor(Theme.bodyText)
+                        } else {
+                            Text("COMING SOON")
+                                .font(.system(size: 8, weight: .heavy))
+                                .tracking(1)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Theme.border)
+                                .cornerRadius(10)
+                        }
+
+                        Spacer()
+
+                        // Arrow circle
+                        ZStack {
+                            Circle()
+                                .fill(isHovered && appCard.enabled ? appCard.accentColor : Color(red: 0.94, green: 0.96, blue: 0.97))
+                                .frame(width: 30, height: 30)
+                                .overlay(
+                                    Circle()
+                                        .stroke(Theme.shadow, lineWidth: 1.5)
+                                )
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(isHovered && appCard.enabled ? .white : Theme.dimText)
+                        }
+                    }
+                }
+                .padding(14)
+            }
+            .background(Theme.cardBg)
+            .cornerRadius(Theme.cornerR)
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.cornerR)
+                    .stroke(Theme.border, lineWidth: Theme.borderW)
+            )
+            .shadow(
+                color: isHovered && appCard.enabled ? Theme.pink : Theme.shadow,
+                radius: 0,
+                x: isHovered && appCard.enabled ? 6 : Theme.shadowX,
+                y: isHovered && appCard.enabled ? 6 : Theme.shadowY
+            )
+            .opacity(appCard.enabled ? 1.0 : 0.55)
+            .scaleEffect(isHovered && appCard.enabled ? 1.02 : 1.0)
+            .offset(x: isHovered && appCard.enabled ? -2 : 0, y: isHovered && appCard.enabled ? -2 : 0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovered)
+        }
+        .buttonStyle(.plain)
+        .disabled(!appCard.enabled)
+        .onHover { hovering in
+            cardHover = hovering ? appCard.id : nil
+        }
+    }
+
+    private var squiggleDivider: some View {
+        // Pink squiggle matching PouetWeb
+        Path { path in
+            let w: CGFloat = 80
+            let h: CGFloat = 10
+            let segments = 4
+            let segW = w / CGFloat(segments)
+            path.move(to: CGPoint(x: 0, y: h / 2))
+            for i in 0..<segments {
+                let x = CGFloat(i) * segW
+                let up = i % 2 == 0
+                path.addQuadCurve(
+                    to: CGPoint(x: x + segW, y: h / 2),
+                    control: CGPoint(x: x + segW / 2, y: up ? 0 : h)
+                )
+            }
+        }
+        .stroke(Theme.pink, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+        .frame(width: 80, height: 10)
+    }
+
+    // MARK: - Studio View (existing app)
+
+    private var studioView: some View {
+        VStack(spacing: 0) {
+            studioHeaderBar
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
+
+            tabBar
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+
+            ScrollView {
+                Group {
+                    switch selectedTab {
+                    case 0: controlCenterTab
+                    case 1: libraryTab
+                    case 2: settingsTab
+                    default: controlCenterTab
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 4)
+                .padding(.bottom, 20)
+            }
+
+            if selectedTab == 0 {
+                levelsFooter
+            }
+
+            versionBar
+        }
+    }
+
+    // MARK: - Studio Header (with back button)
+
+    private var studioHeaderBar: some View {
         HStack(spacing: 12) {
+            Button {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    currentApp = nil
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 11, weight: .bold))
+                    Text("Home")
+                        .font(.system(size: 12, weight: .bold))
+                }
+                .foregroundColor(Theme.purple)
+            }
+            .buttonStyle(.plain)
+
             HStack(spacing: 8) {
                 Text("Pouet")
                     .font(.system(size: 22, weight: .heavy))
@@ -140,6 +419,8 @@ struct ContentView: View {
             }
         }
     }
+
+    // MARK: - Header
 
     private func devicePill<Items: View>(
         icon: String, label: String, active: Bool, color: Color,

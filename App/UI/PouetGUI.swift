@@ -122,7 +122,7 @@ struct PouetGUI: App {
         WindowGroup {
             ContentView(app: app, video: app.video)
                 .frame(minWidth: 520, minHeight: 600)
-                .frame(idealWidth: 520, idealHeight: 680)
+                .frame(idealWidth: 560, idealHeight: 700)
                 .onAppear { delegate.appService = app }
         }
         .windowResizability(.contentSize)
