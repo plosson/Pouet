@@ -16,6 +16,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed for git describe
 
       - name: Import Application certificate
         env:
@@ -84,3 +86,54 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: build/Pouet-*.pkg
+
+      - name: Update appcast
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          VERSION=$(git describe --tags --abbrev=0 | sed 's/^v//')
+          PKG_FILE=$(ls build/Pouet-*.pkg)
+          PKG_NAME=$(basename "$PKG_FILE")
+          DOWNLOAD_URL="https://github.com/plosson/Pouet/releases/download/v${VERSION}/${PKG_NAME}"
+
+          # Download Sparkle tools
+          curl -sL https://github.com/sparkle-project/Sparkle/releases/download/2.9.0/Sparkle-2.9.0.tar.xz | tar xJ -C /tmp
+
+          # Sign the pkg and get signature + length
+          SIGN_OUTPUT=$(/tmp/bin/sign_update "$PKG_FILE" -f <(echo -n "$SPARKLE_PRIVATE_KEY"))
+          ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | grep -o 'sparkle:edSignature="[^"]*"' | cut -d'"' -f2)
+          FILE_LENGTH=$(stat -f%z "$PKG_FILE")
+          PUB_DATE=$(date -R)
+
+          # Build the new appcast entry
+          cat > appcast.xml <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Pouet</title>
+    <language>en</language>
+    <item>
+      <title>Version ${VERSION}</title>
+      <sparkle:version>${VERSION}</sparkle:version>
+      <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+      <pubDate>${PUB_DATE}</pubDate>
+      <enclosure
+        url="${DOWNLOAD_URL}"
+        length="${FILE_LENGTH}"
+        type="application/octet-stream"
+        sparkle:edSignature="${ED_SIGNATURE}"
+        sparkle:installationType="package"
+      />
+    </item>
+  </channel>
+</rss>
+EOF
+
+          # Commit and push the updated appcast
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout main
+          git add appcast.xml
+          git commit -m "Update appcast for v${VERSION}"
+          git push origin main

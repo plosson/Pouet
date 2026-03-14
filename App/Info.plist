@@ -17,9 +17,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>5.1.3</string>
+    <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
-    <string>5.1.3</string>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSPrincipalClass</key>
@@ -30,6 +30,10 @@
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Pouet needs microphone access to proxy your real microphone.</string>
+    <key>SUFeedURL</key>
+    <string>https://raw.githubusercontent.com/plosson/Pouet/main/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>A/PM3ogaVd5PCLKDB/mdZCsd86Y8d/TBPryAcn0F1t8=</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsLocalNetworking</key>

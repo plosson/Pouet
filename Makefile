@@ -1,158 +1,78 @@
-# Makefile — Pouet Audio Server Plugin + companion app
-#
-# Requirements:
-#   - macOS 12+ SDK (Xcode Command Line Tools)
-#   - Apple Developer ID certificate for code-signing
-#   - Developer ID Installer certificate for pkg signing
+# Makefile — Pouet (xcodebuild wrapper)
 #
 # Usage:
-#   make                  # build everything (unsigned)
-#   make sign             # build + sign driver & app
+#   make                  # build app + driver (ad-hoc signed)
+#   make sign             # build with Developer ID signing
 #   make pkg              # build + sign + create installer pkg
 #   make install          # install driver locally for testing (requires sudo)
 #   make uninstall        # remove driver
+#   make test             # run tests
 #   make clean
 
-BUNDLE_ID     = com.pouet.driver
+PROJECT       = Pouet.xcodeproj
+SCHEME        = Pouet
+SYMROOT       = $(CURDIR)/build
+CONFIG        = Release
+PRODUCTS      = $(SYMROOT)/$(CONFIG)
+
 VERSION       = $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "0.0.0")
 
-# ---- Paths ----
-DRIVER_SRC    = Driver/PouetDriver.c
-DRIVER_BUNDLE = build/Pouet.driver
-DRIVER_BINARY = $(DRIVER_BUNDLE)/Contents/MacOS/PouetDriver
-DRIVER_PLIST  = Driver/Pouet.driver/Contents/Info.plist
-
-GUI_SRC       = App/UI/PouetGUI.swift App/Services/Log.swift App/Services/AppService.swift App/Services/AudioService.swift App/Services/AudioMixing.swift App/Services/VideoService.swift App/Services/HotkeyService.swift App/UI/ContentView.swift
-GUI_BUNDLE    = build/Pouet.app
-GUI_BINARY    = $(GUI_BUNDLE)/Contents/MacOS/Pouet
-GUI_BUNDLE_ID = com.pouet.gui
-
-UNINSTALLER   = build/Uninstall Pouet.app
+BUNDLE_ID     = com.pouet.driver
+HAL_DIR       = /Library/Audio/Plug-Ins/HAL
 
 PKG_ROOT      = build/pkg_root
 PKG_OUT       = build/Pouet-$(VERSION).pkg
-
-HAL_DIR       = /Library/Audio/Plug-Ins/HAL
 
 # ---- Signing identities (set via env or override) ----
 DEVID         ?= Developer ID Application: SPRL Losson (427N276E3Q)
 INSTALLER_ID  ?= Developer ID Installer: SPRL Losson (427N276E3Q)
 
-# ---- Compiler flags ----
-CC            = clang
-CFLAGS        = -arch arm64 -arch x86_64 \
-                -mmacosx-version-min=12.0 \
-                -O2 -fvisibility=hidden -fstack-protector-strong \
-                -Wall -Wextra \
-                -framework CoreAudio \
-                -framework CoreFoundation
-
-SWIFTC        = swiftc
-SWIFTFLAGS    = -target arm64-apple-macos13.0 \
-                -sdk $(shell xcrun --show-sdk-path) \
-                -O
-
 # ============================================================
-.PHONY: all driver gui uninstaller sign pkg install uninstall clean test test-c test-swift test-audio test-webrtc
+.PHONY: all clean sign pkg install uninstall uninstaller test test-c test-swift test-audio test-webrtc
 
-all: driver gui uninstaller
+all:
+	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration $(CONFIG) \
+	    SYMROOT=$(SYMROOT) \
+	    CODE_SIGN_IDENTITY=- \
+	    CODE_SIGN_STYLE=Manual \
+	    MARKETING_VERSION=$(VERSION) \
+	    CURRENT_PROJECT_VERSION=$(VERSION) \
+	    build
+	@echo "✓ Built → $(PRODUCTS)/Pouet.app"
 
-# ---- Driver bundle ----
-driver: $(DRIVER_BINARY)
+clean:
+	rm -rf build
 
-$(DRIVER_BINARY): $(DRIVER_SRC) $(DRIVER_PLIST)
-	@mkdir -p $(DRIVER_BUNDLE)/Contents/MacOS
-	@mkdir -p $(DRIVER_BUNDLE)/Contents/Resources
-	$(CC) $(CFLAGS) \
-	    -dynamiclib \
-	    -install_name "@rpath/PouetDriver" \
-	    -exported_symbols_list Driver/exports.lds \
-	    -o $(DRIVER_BINARY) \
-	    $(DRIVER_SRC)
-	@cp $(DRIVER_PLIST) $(DRIVER_BUNDLE)/Contents/Info.plist
-	@/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" $(DRIVER_BUNDLE)/Contents/Info.plist
-	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(VERSION)" $(DRIVER_BUNDLE)/Contents/Info.plist
-	@echo "✓ Driver bundle built → $(DRIVER_BUNDLE)"
+sign:
+	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration $(CONFIG) \
+	    SYMROOT=$(SYMROOT) \
+	    CODE_SIGN_IDENTITY="$(DEVID)" \
+	    CODE_SIGN_STYLE=Manual \
+	    ENABLE_HARDENED_RUNTIME=YES \
+	    MARKETING_VERSION=$(VERSION) \
+	    CURRENT_PROJECT_VERSION=$(VERSION) \
+	    build
+	@echo "✓ Signed build → $(PRODUCTS)/Pouet.app"
 
-# ---- GUI app ----
-gui: $(GUI_BINARY)
-
-$(GUI_BINARY): $(GUI_SRC) $(DRIVER_BINARY)
-	@killall Pouet 2>/dev/null || true
-	@sleep 0.5
-	@mkdir -p $(GUI_BUNDLE)/Contents/MacOS
-	@mkdir -p $(GUI_BUNDLE)/Contents/Resources
-	$(SWIFTC) $(SWIFTFLAGS) \
-	    -parse-as-library \
-	    -import-objc-header App/BridgingHeader.h \
-	    -framework CoreAudio \
-	    -framework AVFoundation \
-	    -framework AudioToolbox \
-	    -framework ScreenCaptureKit \
-	    -o $(GUI_BINARY) \
-	    $(GUI_SRC)
-	@cp App/Info.plist $(GUI_BUNDLE)/Contents/Info.plist
-	@/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" $(GUI_BUNDLE)/Contents/Info.plist
-	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(VERSION)" $(GUI_BUNDLE)/Contents/Info.plist
-	@cp App/AppIcon.icns $(GUI_BUNDLE)/Contents/Resources/AppIcon.icns
-	@cp App/Resources/* $(GUI_BUNDLE)/Contents/Resources/
-	@cp -R $(DRIVER_BUNDLE) $(GUI_BUNDLE)/Contents/Resources/Pouet.driver
-	codesign --force --sign - --entitlements App/entitlements.plist $(GUI_BUNDLE)
-	@echo "✓ GUI app built → $(GUI_BUNDLE)"
-
-# ---- Uninstaller app ----
-uninstaller: $(UNINSTALLER)
-
-$(UNINSTALLER): Uninstaller/uninstall.sh Uninstaller/Info.plist
-	@mkdir -p "$(UNINSTALLER)/Contents/MacOS"
-	@mkdir -p "$(UNINSTALLER)/Contents/Resources"
-	@cp Uninstaller/uninstall.sh "$(UNINSTALLER)/Contents/MacOS/uninstall.sh"
-	@chmod +x "$(UNINSTALLER)/Contents/MacOS/uninstall.sh"
-	@cp Uninstaller/Info.plist "$(UNINSTALLER)/Contents/Info.plist"
-	@cp App/UninstallIcon.icns "$(UNINSTALLER)/Contents/Resources/AppIcon.icns"
-	@echo "✓ Uninstaller built → $(UNINSTALLER)"
-
-# ---- Code signing ----
-sign: all
-	codesign --force --options runtime \
-	    --sign "$(DEVID)" \
-	    --identifier $(BUNDLE_ID) \
-	    $(DRIVER_BUNDLE)
-	codesign --force --options runtime \
-	    --sign "$(DEVID)" \
-	    --identifier $(BUNDLE_ID) \
-	    $(GUI_BUNDLE)/Contents/Resources/Pouet.driver
-	codesign --force --options runtime \
-	    --sign "$(DEVID)" \
-	    --identifier $(GUI_BUNDLE_ID) \
-	    --entitlements App/entitlements.plist \
-	    $(GUI_BUNDLE)
-	codesign --force --options runtime \
-	    --sign "$(DEVID)" \
-	    --identifier com.pouet.uninstaller \
-	    "$(UNINSTALLER)"
-	@echo "✓ Signed"
-
-# ---- Notarize (fill in your Apple ID + app-specific password) ----
-notarize: sign
-	@echo "Zipping for notarization …"
-	ditto -c -k --keepParent $(DRIVER_BUNDLE) build/Pouet_driver.zip
-	xcrun notarytool submit build/Pouet_driver.zip \
-	    --apple-id "$$APPLE_ID" \
-	    --password "$$APPLE_APP_PASSWORD" \
-	    --team-id "$$TEAM_ID" \
-	    --wait
-	xcrun stapler staple $(DRIVER_BUNDLE)
-	@echo "✓ Notarized"
+# ---- Uninstaller app (shell script wrapper) ----
+uninstaller:
+	@mkdir -p "build/Uninstall Pouet.app/Contents/MacOS"
+	@mkdir -p "build/Uninstall Pouet.app/Contents/Resources"
+	@cp Uninstaller/uninstall.sh "build/Uninstall Pouet.app/Contents/MacOS/uninstall.sh"
+	@chmod +x "build/Uninstall Pouet.app/Contents/MacOS/uninstall.sh"
+	@cp Uninstaller/Info.plist "build/Uninstall Pouet.app/Contents/Info.plist"
+	@cp App/UninstallIcon.icns "build/Uninstall Pouet.app/Contents/Resources/AppIcon.icns"
+	codesign --force --options runtime --sign "$(DEVID)" --identifier com.pouet.uninstaller "build/Uninstall Pouet.app"
+	@echo "✓ Uninstaller built"
 
 # ---- Installer package ----
-pkg: sign
+pkg: sign uninstaller
 	@rm -rf $(PKG_ROOT)
 	@mkdir -p $(PKG_ROOT)$(HAL_DIR)
 	@mkdir -p $(PKG_ROOT)/Applications
-	@cp -R $(DRIVER_BUNDLE) $(PKG_ROOT)$(HAL_DIR)/
-	@cp -R $(GUI_BUNDLE)    $(PKG_ROOT)/Applications/
-	@cp -R "$(UNINSTALLER)" "$(PKG_ROOT)/Applications/"
+	@cp -R $(PRODUCTS)/Pouet.driver $(PKG_ROOT)$(HAL_DIR)/
+	@cp -R $(PRODUCTS)/Pouet.app    $(PKG_ROOT)/Applications/
+	@cp -R "build/Uninstall Pouet.app" "$(PKG_ROOT)/Applications/"
 	pkgbuild \
 	    --root $(PKG_ROOT) \
 	    --identifier $(BUNDLE_ID) \
@@ -168,10 +88,10 @@ pkg: sign
 	@echo "✓ Installer → $(PKG_OUT)"
 
 # ---- Local install for testing ----
-install: driver gui
+install: all
 	sudo mkdir -p $(HAL_DIR)
 	sudo rm -rf $(HAL_DIR)/Pouet.driver
-	sudo cp -R $(DRIVER_BUNDLE) $(HAL_DIR)/
+	sudo cp -R $(PRODUCTS)/Pouet.driver $(HAL_DIR)/
 	sudo chown -R root:wheel $(HAL_DIR)/Pouet.driver
 	sudo killall -9 coreaudiod 2>/dev/null || true
 	@sleep 2
@@ -197,7 +117,9 @@ test-c: Tests/test_driver.c
 
 test-swift: Tests/test_app.swift App/shm_bridge.h App/Services/AudioMixing.swift
 	@mkdir -p build
-	$(SWIFTC) $(SWIFTFLAGS) \
+	swiftc -target arm64-apple-macos13.0 \
+	    -sdk $(shell xcrun --show-sdk-path) \
+	    -O \
 	    -parse-as-library \
 	    -import-objc-header App/shm_bridge.h \
 	    -o build/test_app \
@@ -213,6 +135,3 @@ test-webrtc: Tests/tone_injector.c Tests/webrtc_loopback.html Tests/test_webrtc.
 	@mkdir -p build
 	@cd "$(CURDIR)" && npm ls playwright >/dev/null 2>&1 || npm install playwright
 	node Tests/test_webrtc.mjs
-
-clean:
-	rm -rf build .build
