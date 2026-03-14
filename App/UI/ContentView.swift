@@ -33,6 +33,7 @@ private enum Theme {
 
 struct ContentView: View {
     @ObservedObject var app: AppService
+    @ObservedObject var video: VideoService
 
     @State private var toast: String?
     @State private var selectedTab = 0
@@ -441,8 +442,8 @@ struct ContentView: View {
 
     private var filteredWindows: [WindowInfo] {
         let query = windowSearchText.trimmingCharacters(in: .whitespaces).lowercased()
-        if query.isEmpty { return app.video.availableWindows }
-        return app.video.availableWindows.filter {
+        if query.isEmpty { return video.availableWindows }
+        return video.availableWindows.filter {
             $0.title.lowercased().contains(query) || $0.appName.lowercased().contains(query)
         }
     }
@@ -456,11 +457,11 @@ struct ContentView: View {
                         sectionTitle("Window Capture", icon: "macwindow")
                         Spacer()
                         pillButton("Refresh", icon: "arrow.clockwise", color: Theme.accent) {
-                            Task { await app.video.refreshWindows() }
+                            Task { await video.refreshWindows() }
                         }
                     }
 
-                    if app.video.availableWindows.isEmpty {
+                    if video.availableWindows.isEmpty {
                         HStack {
                             Spacer()
                             VStack(spacing: 10) {
@@ -507,12 +508,12 @@ struct ContentView: View {
                     HStack(spacing: 12) {
                         Button {
                             Task {
-                                if app.video.isCapturing {
-                                    await app.video.stopCapture()
+                                if video.isCapturing {
+                                    await video.stopCapture()
                                     showToast("Capture stopped")
                                 } else {
                                     do {
-                                        try await app.video.startCapture()
+                                        try await video.startCapture()
                                         showToast("Capturing...")
                                     } catch {
                                         showToast("Capture failed: \(error.localizedDescription)")
@@ -521,31 +522,31 @@ struct ContentView: View {
                             }
                         } label: {
                             HStack(spacing: 8) {
-                                Image(systemName: app.video.isCapturing ? "stop.fill" : "record.circle")
+                                Image(systemName: video.isCapturing ? "stop.fill" : "record.circle")
                                     .font(.system(size: 14, weight: .bold))
-                                Text(app.video.isCapturing ? "Stop" : "Start Capture")
+                                Text(video.isCapturing ? "Stop" : "Start Capture")
                                     .font(.system(size: 13, weight: .bold))
                             }
-                            .foregroundColor(app.video.selectedWindowID != nil ? .white : Theme.dimText)
+                            .foregroundColor(video.selectedWindowID != nil ? .white : Theme.dimText)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                             .background(
                                 RoundedRectangle(cornerRadius: 14)
-                                    .fill(app.video.isCapturing ? Theme.coral :
-                                          app.video.selectedWindowID != nil ? Theme.accent :
+                                    .fill(video.isCapturing ? Theme.coral :
+                                          video.selectedWindowID != nil ? Theme.accent :
                                           Color.black.opacity(0.05))
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 14)
-                                    .stroke(app.video.selectedWindowID != nil ? Theme.border : Color.clear, lineWidth: Theme.borderW)
+                                    .stroke(video.selectedWindowID != nil ? Theme.border : Color.clear, lineWidth: Theme.borderW)
                             )
                         }
                         .buttonStyle(.plain)
-                        .disabled(app.video.selectedWindowID == nil)
+                        .disabled(video.selectedWindowID == nil)
 
                         Button {
                             Task {
-                                let result = await app.video.saveSnapshot()
+                                let result = await video.saveSnapshot()
                                 if let url = result.url {
                                     showToast("Saved: \(url.lastPathComponent)")
                                 } else {
@@ -556,29 +557,29 @@ struct ContentView: View {
                             HStack(spacing: 8) {
                                 Image(systemName: "camera.fill")
                                     .font(.system(size: 14, weight: .bold))
-                                Text("Save (\(Int(app.video.bufferDurationSeconds))s)")
+                                Text("Save (\(Int(video.bufferDurationSeconds))s)")
                                     .font(.system(size: 13, weight: .bold))
                             }
-                            .foregroundColor(app.video.isCapturing ? .white : Theme.dimText)
+                            .foregroundColor(video.isCapturing ? .white : Theme.dimText)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                             .background(
                                 RoundedRectangle(cornerRadius: 14)
-                                    .fill(app.video.isCapturing ? Theme.purple : Color.black.opacity(0.05))
+                                    .fill(video.isCapturing ? Theme.purple : Color.black.opacity(0.05))
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 14)
-                                    .stroke(app.video.isCapturing ? Theme.border : Color.clear, lineWidth: Theme.borderW)
+                                    .stroke(video.isCapturing ? Theme.border : Color.clear, lineWidth: Theme.borderW)
                             )
                         }
                         .buttonStyle(.plain)
-                        .disabled(!app.video.isCapturing)
+                        .disabled(!video.isCapturing)
                     }
 
                     // Options row
                     HStack(spacing: 16) {
                         Toggle(isOn: Binding(
-                            get: { app.video.captureAudio },
+                            get: { video.captureAudio },
                             set: { app.setVideoCaptureAudio($0) }
                         )) {
                             HStack(spacing: 5) {
@@ -597,11 +598,11 @@ struct ContentView: View {
                             Text("Buffer:")
                                 .font(.system(size: 12, weight: .semibold))
                                 .foregroundColor(Theme.bodyText)
-                            Text("\(Int(app.video.bufferDurationSeconds))s")
+                            Text("\(Int(video.bufferDurationSeconds))s")
                                 .font(.system(size: 13, weight: .heavy, design: .monospaced))
                                 .foregroundColor(Theme.bodyText)
                             Slider(value: Binding(
-                                get: { app.video.bufferDurationSeconds },
+                                get: { video.bufferDurationSeconds },
                                 set: { app.setVideoBufferSeconds($0) }
                             ), in: 1...10, step: 1)
                             .tint(Theme.accent)
@@ -612,13 +613,13 @@ struct ContentView: View {
             }
 
             // Recent video snapshots
-            if !app.video.recentVideoSnapshots.isEmpty {
+            if !video.recentVideoSnapshots.isEmpty {
                 card {
                     VStack(alignment: .leading, spacing: 14) {
                         sectionTitle("Video Snapshots", icon: "film")
 
                         VStack(spacing: 8) {
-                            ForEach(app.video.recentVideoSnapshots, id: \.absoluteString) { url in
+                            ForEach(video.recentVideoSnapshots, id: \.absoluteString) { url in
                                 videoSnapshotRow(url: url)
                             }
                         }
@@ -627,15 +628,15 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            Task { await app.video.refreshWindows() }
-            app.video.refreshVideoSnapshots()
+            Task { await video.refreshWindows() }
+            video.refreshVideoSnapshots()
         }
     }
 
     private func windowRow(_ window: WindowInfo) -> some View {
-        let isSelected = app.video.selectedWindowID == window.id
+        let isSelected = video.selectedWindowID == window.id
         return Button {
-            app.video.selectedWindowID = window.id
+            video.selectedWindowID = window.id
         } label: {
             HStack(spacing: 10) {
                 if let icon = window.appIcon {
