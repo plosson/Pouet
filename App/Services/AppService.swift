@@ -14,6 +14,8 @@ struct AppConfig: Codable {
     var injectVolume: Float?
     var selectedOutputDevice: String?
     var dashcamBufferSeconds: Double?
+    var videoCaptureAudio: Bool?
+    var videoBufferSeconds: Double?
     var savedInputDefaultUID: String?   // original system default before we switched to Pouet
     var savedOutputDefaultUID: String?  // original system default before we switched to PouetSpeaker
 
@@ -43,6 +45,7 @@ struct AppConfig: Codable {
 
 class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     let audio: AudioService
+    let video = VideoService()
 
     // MARK: - Published State
 
@@ -93,6 +96,11 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         self.volume = config.injectVolume ?? 1.0
         self.dashcamBufferSeconds = config.dashcamBufferSeconds ?? 5.0
         super.init()
+
+        // Video config
+        video.captureAudio = config.videoCaptureAudio ?? true
+        video.bufferDurationSeconds = config.videoBufferSeconds ?? 5.0
+        video.snapshotsDir = snapshotsDir
 
         // Ensure directories exist
         try? FileManager.default.createDirectory(
@@ -173,6 +181,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         stopPolling()
         audio.stopProxy()
         audio.stopSpeakerProxy()
+        Task { await video.stopCapture() }
 
         // Restore original system defaults
         if let origIn = originalInputDeviceID {
@@ -268,6 +277,21 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         if let deviceName = speakerProxyDeviceName {
             selectOutputDevice(deviceName)
         }
+    }
+
+    // MARK: - Video Config
+
+    func setVideoCaptureAudio(_ enabled: Bool) {
+        video.captureAudio = enabled
+        config.videoCaptureAudio = enabled
+        config.save()
+    }
+
+    func setVideoBufferSeconds(_ seconds: Double) {
+        let clamped = max(1, min(10, seconds))
+        video.bufferDurationSeconds = clamped
+        config.videoBufferSeconds = clamped
+        config.save()
     }
 
     func saveDashcamSnapshot() -> (url: URL?, error: String?) {
@@ -404,8 +428,10 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         config.save()
         try? FileManager.default.createDirectory(atPath: soundsDir, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(atPath: snapshotsDir, withIntermediateDirectories: true)
+        video.snapshotsDir = snapshotsDir
         refreshSounds()
         refreshSnapshots()
+        video.refreshVideoSnapshots()
     }
 
     var driverInstalled: Bool {
