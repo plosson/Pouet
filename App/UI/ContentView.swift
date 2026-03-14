@@ -65,6 +65,7 @@ struct ContentView: View {
                         }
                     }
                     .padding(.horizontal, 20)
+                    .padding(.top, 4)
                     .padding(.bottom, 20)
                 }
 
@@ -281,7 +282,7 @@ struct ContentView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "camera.fill")
                                 .font(.system(size: 14, weight: .bold))
-                            Text("Save Audio Snapshot (\(Int(app.dashcamBufferSeconds))s)")
+                            Text("Save Audio Snapshot (\(Int(app.dashcamBufferSeconds))s) — ⌘\(app.hotkey.keyDisplayName)")
                                 .font(.system(size: 13, weight: .bold))
                         }
                         .foregroundColor(app.speakerProxyRunning ? .white : Theme.dimText)
@@ -409,7 +410,7 @@ struct ContentView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "camera.fill")
                                 .font(.system(size: 14, weight: .bold))
-                            Text("Save Video Snapshot (\(Int(video.bufferDurationSeconds))s)")
+                            Text("Save Video Snapshot (\(Int(video.bufferDurationSeconds))s) — ⌘\(app.hotkey.keyDisplayName)\(app.hotkey.keyDisplayName)")
                                 .font(.system(size: 13, weight: .bold))
                         }
                         .foregroundColor(video.isCapturing ? .white : Theme.dimText)
@@ -837,6 +838,33 @@ struct ContentView: View {
                                 .tint(Theme.accent)
                             }
                             Text("Rolling buffer for video snapshots")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(Theme.dimText)
+                        }
+
+                        separator
+
+                        // Hotkey
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Hotkey")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(Theme.bodyText)
+                            HStack(spacing: 10) {
+                                Text("⌘")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundColor(Theme.dimText)
+                                Picker("", selection: Binding(
+                                    get: { UInt16(app.hotkey.keyCode) },
+                                    set: { app.setHotkeyKey($0) }
+                                )) {
+                                    ForEach(HotkeyService.availableKeys, id: \.keyCode) { key in
+                                        Text(key.name).tag(key.keyCode)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(width: 60)
+                            }
+                            Text("Audio: ⌘\(app.hotkey.keyDisplayName) · Video: ⌘\(app.hotkey.keyDisplayName)\(app.hotkey.keyDisplayName)")
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundColor(Theme.dimText)
                         }

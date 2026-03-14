@@ -27,6 +27,7 @@ struct AppConfig: Codable {
     var dashcamBufferSeconds: Double?
     var videoCaptureAudio: Bool?
     var videoBufferSeconds: Double?
+    var hotkeyKeyCode: UInt16?
     var savedInputDefaultUID: String?   // original system default before we switched to Pouet
     var savedOutputDefaultUID: String?  // original system default before we switched to PouetSpeaker
 
@@ -115,6 +116,11 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         video.captureAudio = config.videoCaptureAudio ?? true
         video.bufferDurationSeconds = config.videoBufferSeconds ?? 5.0
         video.snapshotsDir = videoSnapshotsDir
+
+        // Hotkey config
+        if let kc = config.hotkeyKeyCode {
+            hotkey.keyCode = kc
+        }
 
         // Ensure directories exist
         try? FileManager.default.createDirectory(
@@ -310,6 +316,16 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         video.bufferDurationSeconds = clamped
         config.videoBufferSeconds = clamped
         config.save()
+    }
+
+    // MARK: - Hotkey Config
+
+    func setHotkeyKey(_ keyCode: UInt16) {
+        hotkey.stop()
+        hotkey.keyCode = keyCode
+        config.hotkeyKeyCode = keyCode
+        config.save()
+        hotkey.start()
     }
 
     func saveDashcamSnapshot() -> (url: URL?, error: String?) {

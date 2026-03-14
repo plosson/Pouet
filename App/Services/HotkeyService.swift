@@ -1,75 +1,87 @@
-// HotkeyService.swift — Global hotkey registration using CGEvent tap
+// HotkeyService.swift — Global hotkey registration using NSEvent monitors
 // Cmd+J = audio snapshot, Cmd+J J (double tap) = video snapshot
+// Uses NSEvent global/local monitors — no Accessibility permission required.
 
 import Foundation
-import CoreGraphics
-import Combine
+import AppKit
 
 class HotkeyService {
-    fileprivate var eventTap: CFMachPort?
-    fileprivate var runLoopSource: CFRunLoopSource?
+    private var globalMonitor: Any?
+    private var localMonitor: Any?
     private var lastTapTime: Date?
     private let doubleTapInterval: TimeInterval = 0.35
+    private var pendingAudioTimer: DispatchWorkItem?
 
     // Callbacks
     var onAudioSnapshot: (() -> Void)?
     var onVideoSnapshot: (() -> Void)?
 
     // Configurable key (default: J = keycode 38)
-    var keyCode: CGKeyCode = 38
-    var modifierFlags: CGEventFlags = .maskCommand
+    var keyCode: UInt16 = 38 {
+        didSet { keyDisplayName = Self.displayName(for: keyCode) }
+    }
 
-    private var pendingAudioTimer: DispatchWorkItem?
+    // Human-readable key name for UI display
+    private(set) var keyDisplayName: String = "J"
+
+    // Map keycodes to display names
+    static func displayName(for keyCode: UInt16) -> String {
+        let map: [UInt16: String] = [
+            0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G",
+            6: "Z", 7: "X", 8: "C", 9: "V", 11: "B", 12: "Q",
+            13: "W", 14: "E", 15: "R", 16: "Y", 17: "T", 18: "1",
+            19: "2", 20: "3", 21: "4", 22: "6", 23: "5", 24: "=",
+            25: "9", 26: "7", 27: "-", 28: "8", 29: "0", 31: "O",
+            32: "U", 34: "I", 35: "P", 37: "L", 38: "J", 40: "K",
+            45: "N", 46: "M",
+        ]
+        return map[keyCode] ?? "?\(keyCode)"
+    }
+
+    /// Available single-letter keys suitable for Cmd+key hotkeys
+    /// (excludes letters commonly used by system: A, C, V, X, Z, Q, W, S, N, O, P, H, M, F)
+    static let availableKeys: [(name: String, keyCode: UInt16)] = [
+        ("B", 11), ("D", 2), ("E", 14), ("G", 5), ("I", 34),
+        ("J", 38), ("K", 40), ("L", 37), ("R", 15), ("T", 17),
+        ("U", 32), ("Y", 16),
+    ]
 
     init() {}
 
     func start() {
-        let eventMask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
-
-        // Use a raw pointer to self for the callback
-        let unmanagedSelf = Unmanaged.passUnretained(self)
-        let userInfo = unmanagedSelf.toOpaque()
-
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: eventMask,
-            callback: hotkeyCallback,
-            userInfo: userInfo
-        ) else {
-            Log.error("Failed to create CGEvent tap — check Accessibility permissions")
-            return
+        // Global monitor: fires when another app is active (cannot consume events)
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.handleEvent(event)
         }
 
-        eventTap = tap
-        runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-        Log.info("Global hotkey registered (Cmd+J)")
+        // Local monitor: fires when Pouet is active (can consume events)
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if self?.handleEvent(event) == true {
+                return nil // consume
+            }
+            return event
+        }
+
+        Log.info("Global hotkey registered (Cmd+\(keyDisplayName))")
     }
 
     func stop() {
         pendingAudioTimer?.cancel()
         pendingAudioTimer = nil
-        if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-        }
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-        }
-        eventTap = nil
-        runLoopSource = nil
+        if let m = globalMonitor { NSEvent.removeMonitor(m) }
+        if let m = localMonitor { NSEvent.removeMonitor(m) }
+        globalMonitor = nil
+        localMonitor = nil
         Log.info("Global hotkey unregistered")
     }
 
-    fileprivate func handleKeyDown(keyCode: CGKeyCode, flags: CGEventFlags) -> Bool {
-        // Check if it's our hotkey
-        guard keyCode == self.keyCode,
-              flags.contains(modifierFlags),
-              !flags.contains(.maskControl),
-              !flags.contains(.maskAlternate),
-              !flags.contains(.maskShift) else {
+    @discardableResult
+    private func handleEvent(_ event: NSEvent) -> Bool {
+        guard event.keyCode == keyCode,
+              event.modifierFlags.contains(.command),
+              !event.modifierFlags.contains(.control),
+              !event.modifierFlags.contains(.option),
+              !event.modifierFlags.contains(.shift) else {
             return false
         }
 
@@ -97,38 +109,10 @@ class HotkeyService {
             DispatchQueue.main.asyncAfter(deadline: .now() + doubleTapInterval, execute: timer)
         }
 
-        return true // Consume the event
+        return true
     }
 
     deinit {
         stop()
     }
-}
-
-// C callback — bridges to HotkeyService instance
-private func hotkeyCallback(
-    proxy: CGEventTapProxy,
-    type: CGEventType,
-    event: CGEvent,
-    userInfo: UnsafeMutableRawPointer?
-) -> Unmanaged<CGEvent>? {
-    guard let userInfo = userInfo else { return Unmanaged.passUnretained(event) }
-    let service = Unmanaged<HotkeyService>.fromOpaque(userInfo).takeUnretainedValue()
-
-    if type == .keyDown {
-        let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
-        let flags = event.flags
-        if service.handleKeyDown(keyCode: keyCode, flags: flags) {
-            return nil // Consume the event
-        }
-    }
-
-    // If the tap is disabled by the system (timeout), re-enable it
-    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-        if let tap = service.eventTap {
-            CGEvent.tapEnable(tap: tap, enable: true)
-        }
-    }
-
-    return Unmanaged.passUnretained(event)
 }
