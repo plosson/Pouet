@@ -39,6 +39,8 @@ private struct AppCard: Identifiable {
     let name: String
     let description: String
     let icon: String
+    let previewImage: String?   // resource name (without extension) — png or gif
+    let previewExt: String      // "png" or "gif"
     let previewColor: Color
     let accentColor: Color
     let enabled: Bool
@@ -48,8 +50,10 @@ private let appCards: [AppCard] = [
     AppCard(
         id: "studio",
         name: "Studio",
-        description: "Virtual mic proxy with audio injection, dashcam snapshots, and video capture.",
+        description: "Virtual mic proxy with audio injection and video capture.",
         icon: "waveform.circle.fill",
+        previewImage: nil,
+        previewExt: "png",
         previewColor: Color(red: 0.83, green: 0.95, blue: 0.93),  // mint pastel
         accentColor: Theme.accent,
         enabled: true
@@ -59,6 +63,8 @@ private let appCards: [AppCard] = [
         name: "BubbleSnap",
         description: "Add speech bubbles to screenshots. Roast your friends in style.",
         icon: "bubble.left.and.bubble.right.fill",
+        previewImage: "preview-bubblesnap",
+        previewExt: "png",
         previewColor: Color(red: 0.99, green: 0.89, blue: 0.93),  // pink pastel #fce4ec
         accentColor: Theme.pink,
         enabled: false
@@ -68,6 +74,8 @@ private let appCards: [AppCard] = [
         name: "FaceGIF",
         description: "Swap any face onto any GIF. Chaotic. Beautiful. Unhinged.",
         icon: "face.smiling.fill",
+        previewImage: "preview-facegif",
+        previewExt: "gif",
         previewColor: Color(red: 0.93, green: 0.91, blue: 0.99),  // violet pastel #ede9fe
         accentColor: Theme.violet,
         enabled: false
@@ -77,6 +85,8 @@ private let appCards: [AppCard] = [
         name: "HeadCut",
         description: "Isolate heads from photos as transparent PNGs. No Photoshop needed.",
         icon: "scissors",
+        previewImage: "head3",
+        previewExt: "png",
         previewColor: Color(red: 1.0, green: 0.95, blue: 0.85),   // amber pastel #fef3c7
         accentColor: Theme.amber,
         enabled: false
@@ -102,7 +112,7 @@ private class FloatingHead {
         self.y = y
         self.size = size
         self.imageName = imageName
-        let speed = CGFloat.random(in: 0.3...0.8)
+        let speed = CGFloat.random(in: 0.12...0.32)
         let angle = CGFloat.random(in: 0...(2 * .pi))
         self.vx = cos(angle) * speed
         self.vy = sin(angle) * speed
@@ -119,31 +129,31 @@ private class FloatingHeadsState: ObservableObject {
     var mouseX: CGFloat = -1000
     var mouseY: CGFloat = -1000
     private var timer: Timer?
+    private var lastTime: CFAbsoluteTime = 0
 
-    private let maxSpeed: CGFloat = 2.5
-    private let drag: CGFloat = 0.9995
-    private let minDrift: CGFloat = 0.2
+    private let maxSpeed: CGFloat = 1.0
     private let fleeRadius: CGFloat = 150
     private let fleeForce: CGFloat = 0.35
-    private let bounceRestitution: CGFloat = -0.8
 
     func setup(width: CGFloat, height: CGFloat) {
         guard heads.isEmpty else { return }
         let positions: [(CGFloat, CGFloat, CGFloat, String)] = [
-            (0.08, 0.15, 70, "head1"),
-            (0.85, 0.25, 85, "head2"),
-            (0.12, 0.70, 65, "head3"),
-            (0.82, 0.60, 78, "head4"),
+            (0.08, 0.15, 90, "head1"),
+            (0.85, 0.25, 110, "head2"),
+            (0.12, 0.70, 80, "head3"),
+            (0.82, 0.60, 100, "head4"),
         ]
         for (fx, fy, sz, name) in positions {
             heads.append(FloatingHead(x: fx * width, y: fy * height, size: sz, imageName: name))
         }
+        lastTime = CFAbsoluteTimeGetCurrent()
         startTimer()
     }
 
     func startTimer() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+        lastTime = CFAbsoluteTimeGetCurrent()
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             self?.step()
         }
     }
@@ -154,30 +164,16 @@ private class FloatingHeadsState: ObservableObject {
     }
 
     private func step() {
-        let dt: CGFloat = 1.0
+        let now = CFAbsoluteTimeGetCurrent()
+        let dt = min(CGFloat((now - lastTime) * 1000), 50) // milliseconds, capped at 50ms
+        lastTime = now
 
         for h in heads {
-            // Drag
-            h.vx *= drag
-            h.vy *= drag
-
-            // Minimum drift nudge
-            let speed = sqrt(h.vx * h.vx + h.vy * h.vy)
-            if speed < minDrift {
-                h.vx += CGFloat.random(in: -0.1...0.1)
-                h.vy += CGFloat.random(in: -0.1...0.1)
-            }
-
-            // Speed cap
-            let curSpeed = sqrt(h.vx * h.vx + h.vy * h.vy)
-            if curSpeed > maxSpeed {
-                h.vx = h.vx / curSpeed * maxSpeed
-                h.vy = h.vy / curSpeed * maxSpeed
-            }
-
             // Cursor flee
-            let dx = h.x + h.size / 2 - mouseX
-            let dy = h.y + h.size / 2 - mouseY
+            let hcx = h.x + h.size / 2
+            let hcy = h.y + h.size / 2
+            let dx = hcx - mouseX
+            let dy = hcy - mouseY
             let dist = sqrt(dx * dx + dy * dy)
             if dist < fleeRadius && dist > 0 {
                 let strength = fleeForce * (1 - dist / fleeRadius)
@@ -186,25 +182,40 @@ private class FloatingHeadsState: ObservableObject {
                 h.rotV += CGFloat.random(in: -0.05...0.05)
             }
 
-            // Move
+            // Speed cap
+            let speed = sqrt(h.vx * h.vx + h.vy * h.vy)
+            if speed > maxSpeed {
+                h.vx = h.vx / speed * maxSpeed
+                h.vy = h.vy / speed * maxSpeed
+            }
+
+            // Drag
+            h.vx *= 0.9995
+            h.vy *= 0.9995
+            h.rotV *= 0.998
+
+            // Move (dt in ms, matching web)
             h.x += h.vx * dt
             h.y += h.vy * dt
-
-            // Rotation
-            h.rotV *= 0.998
             h.rot += h.rotV * dt * 0.05
-
-            // Bob & squash
-            h.bobPhase += 0.002 * dt
             h.squashPhase += 0.002 * dt
+            h.bobPhase += 0.0015 * dt
+
+            // Minimum drift
+            let curSpeed = sqrt(h.vx * h.vx + h.vy * h.vy)
+            if curSpeed < 0.2 {
+                let a = CGFloat.random(in: 0...(2 * .pi))
+                h.vx += cos(a) * 0.05
+                h.vy += sin(a) * 0.05
+            }
         }
 
         // Head-to-head collisions
         for i in 0..<heads.count {
             for j in (i + 1)..<heads.count {
                 let a = heads[i], b = heads[j]
-                let dx = b.x + b.size / 2 - (a.x + a.size / 2)
-                let dy = b.y + b.size / 2 - (a.y + a.size / 2)
+                let dx = (b.x + b.size / 2) - (a.x + a.size / 2)
+                let dy = (b.y + b.size / 2) - (a.y + a.size / 2)
                 let dist = sqrt(dx * dx + dy * dy)
                 let minDist = (a.size + b.size) / 2 * 0.75
                 if dist < minDist && dist > 0 {
@@ -232,10 +243,10 @@ private class FloatingHeadsState: ObservableObject {
 
     func bounceWalls(width: CGFloat, height: CGFloat) {
         for h in heads {
-            if h.x < 0 { h.x = 0; h.vx *= bounceRestitution; h.rotV = CGFloat.random(in: -0.4...0.4) }
-            if h.x + h.size > width { h.x = width - h.size; h.vx *= bounceRestitution; h.rotV = CGFloat.random(in: -0.4...0.4) }
-            if h.y < 0 { h.y = 0; h.vy *= bounceRestitution; h.rotV = CGFloat.random(in: -0.4...0.4) }
-            if h.y + h.size > height { h.y = height - h.size; h.vy *= bounceRestitution; h.rotV = CGFloat.random(in: -0.4...0.4) }
+            if h.x < 0 { h.x = 0; h.vx = abs(h.vx) * 0.8; h.rotV = CGFloat.random(in: -0.4...0.4) }
+            if h.x + h.size > width { h.x = width - h.size; h.vx = -abs(h.vx) * 0.8; h.rotV = CGFloat.random(in: -0.4...0.4) }
+            if h.y < 0 { h.y = 0; h.vy = abs(h.vy) * 0.8; h.rotV = CGFloat.random(in: -0.4...0.4) }
+            if h.y + h.size > height { h.y = height - h.size; h.vy = -abs(h.vy) * 0.8; h.rotV = CGFloat.random(in: -0.4...0.4) }
         }
     }
 }
@@ -354,80 +365,75 @@ struct ContentView: View {
     // MARK: - Home Screen
 
     private var homeScreen: some View {
-        ZStack {
-            FloatingHeadsView(state: floatingHeads)
+        VStack(spacing: 0) {
+            Spacer().frame(height: 32)
 
-            VStack(spacing: 0) {
-            ScrollView {
-                VStack(spacing: 24) {
-                    // Hero
-                    VStack(spacing: 12) {
-                        Spacer().frame(height: 16)
+            // Badge
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Theme.accent)
+                    .frame(width: 8, height: 8)
+                Text("CREATIVE SUITE")
+                    .font(.system(size: 9, weight: .heavy))
+                    .tracking(1.5)
+                    .foregroundColor(.white)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(Theme.border)
+            .cornerRadius(20)
 
-                        // Badge
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(Theme.accent)
-                                .frame(width: 8, height: 8)
-                            Text("CREATIVE SUITE")
-                                .font(.system(size: 9, weight: .heavy))
-                                .tracking(1.5)
-                                .foregroundColor(.white)
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 6)
-                        .background(Theme.border)
-                        .cornerRadius(20)
+            Spacer().frame(height: 16)
 
-                        // Title
-                        (Text("Stupid little ")
-                            .font(.system(size: 28, weight: .heavy))
-                            .foregroundColor(Theme.bodyText)
-                        + Text("tools")
-                            .font(.system(size: 28, weight: .heavy))
-                            .foregroundColor(Theme.violet)
-                        + Text(" for stupid little things")
-                            .font(.system(size: 28, weight: .heavy))
-                            .foregroundColor(Theme.bodyText)
-                        )
-                        .multilineTextAlignment(.center)
-                        .tracking(-0.5)
-                        .padding(.horizontal, 20)
+            // Title
+            (Text("Stupid little ")
+                .font(.system(size: 28, weight: .heavy))
+                .foregroundColor(Theme.bodyText)
+            + Text("tools")
+                .font(.system(size: 28, weight: .heavy))
+                .foregroundColor(Theme.violet)
+            + Text(" for stupid little things")
+                .font(.system(size: 28, weight: .heavy))
+                .foregroundColor(Theme.bodyText)
+            )
+            .multilineTextAlignment(.center)
+            .tracking(-0.5)
+            .padding(.horizontal, 40)
 
-                        // Subtitle
-                        Text("A collection of fun desktop tools. No installs, no signups. Just vibes.")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(Theme.dimText)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 40)
+            Spacer().frame(height: 8)
 
-                        // Squiggle divider
-                        squiggleDivider
-                            .padding(.top, 4)
-                    }
+            // Subtitle
+            Text("A collection of fun desktop tools. No signups. Just vibes.")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(Theme.dimText)
 
-                    // App cards grid — 2 columns
-                    LazyVGrid(columns: [
-                        GridItem(.flexible(), spacing: 16),
-                        GridItem(.flexible(), spacing: 16),
-                    ], spacing: 16) {
-                        ForEach(appCards) { appCard in
-                            homeAppCard(appCard)
-                        }
-                    }
-                    .padding(.horizontal, 24)
+            Spacer().frame(height: 16)
 
-                    // Footer
-                    Text("More stupid tools coming soon.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(Theme.dimText)
-                        .padding(.bottom, 20)
+            squiggleDivider
+
+            Spacer().frame(height: 28)
+
+            // App cards — 4 in a row
+            HStack(alignment: .top, spacing: 16) {
+                ForEach(appCards) { appCard in
+                    homeAppCard(appCard)
+                        .frame(maxWidth: .infinity)
                 }
             }
+            .padding(.horizontal, 32)
+
+            Spacer().frame(height: 24)
+
+            // Footer
+            Text("More stupid tools coming soon.")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(Theme.dimText)
+
+            Spacer()
 
             versionBar
         }
-        } // ZStack
+        .background(FloatingHeadsView(state: floatingHeads))
     }
 
     private func homeAppCard(_ appCard: AppCard) -> some View {
@@ -444,12 +450,21 @@ struct ContentView: View {
                 ZStack {
                     appCard.previewColor
 
-                    Image(systemName: appCard.icon)
-                        .font(.system(size: 36, weight: .bold))
-                        .foregroundColor(appCard.accentColor.opacity(0.5))
+                    if let imgName = appCard.previewImage,
+                       let path = Bundle.main.path(forResource: imgName, ofType: appCard.previewExt),
+                       let nsImage = NSImage(contentsOfFile: path) {
+                        Image(nsImage: nsImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } else {
+                        Image(systemName: appCard.icon)
+                            .font(.system(size: 36, weight: .bold))
+                            .foregroundColor(appCard.accentColor.opacity(0.5))
+                    }
                 }
                 .frame(height: 120)
                 .frame(maxWidth: .infinity)
+                .clipped()
                 .overlay(alignment: .bottom) {
                     Rectangle()
                         .fill(Theme.border)
@@ -459,34 +474,32 @@ struct ContentView: View {
                 // Content
                 VStack(alignment: .leading, spacing: 6) {
                     Text(appCard.name)
-                        .font(.system(size: 16, weight: .heavy))
+                        .font(.system(size: 14, weight: .heavy))
                         .foregroundColor(Theme.bodyText)
                         .tracking(-0.3)
 
                     Text(appCard.description)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundColor(Theme.dimText)
-                        .lineLimit(2)
+                        .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
-
-                    Spacer(minLength: 8)
 
                     // Bottom row
                     HStack {
                         if appCard.enabled {
                             Text("OPEN")
-                                .font(.system(size: 10, weight: .heavy))
+                                .font(.system(size: 9, weight: .heavy))
                                 .tracking(1)
                                 .foregroundColor(Theme.bodyText)
                         } else {
                             Text("COMING SOON")
-                                .font(.system(size: 8, weight: .heavy))
-                                .tracking(1)
+                                .font(.system(size: 7, weight: .heavy))
+                                .tracking(0.8)
                                 .foregroundColor(.white)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
                                 .background(Theme.border)
-                                .cornerRadius(10)
+                                .cornerRadius(8)
                         }
 
                         Spacer()
@@ -495,18 +508,18 @@ struct ContentView: View {
                         ZStack {
                             Circle()
                                 .fill(isHovered && appCard.enabled ? appCard.accentColor : Color(red: 0.94, green: 0.96, blue: 0.97))
-                                .frame(width: 30, height: 30)
+                                .frame(width: 26, height: 26)
                                 .overlay(
                                     Circle()
                                         .stroke(Theme.shadow, lineWidth: 1.5)
                                 )
                             Image(systemName: "arrow.right")
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: 10, weight: .bold))
                                 .foregroundColor(isHovered && appCard.enabled ? .white : Theme.dimText)
                         }
                     }
                 }
-                .padding(14)
+                .padding(10)
             }
             .background(Theme.cardBg)
             .cornerRadius(Theme.cornerR)
@@ -520,7 +533,7 @@ struct ContentView: View {
                 x: isHovered && appCard.enabled ? 6 : Theme.shadowX,
                 y: isHovered && appCard.enabled ? 6 : Theme.shadowY
             )
-            .opacity(appCard.enabled ? 1.0 : 0.55)
+            .opacity(appCard.enabled ? 1.0 : 0.7)
             .scaleEffect(isHovered && appCard.enabled ? 1.02 : 1.0)
             .offset(x: isHovered && appCard.enabled ? -2 : 0, y: isHovered && appCard.enabled ? -2 : 0)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovered)

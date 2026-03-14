@@ -95,7 +95,7 @@ $(GUI_BINARY): $(GUI_SRC) $(DRIVER_BINARY)
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" $(GUI_BUNDLE)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(VERSION)" $(GUI_BUNDLE)/Contents/Info.plist
 	@cp App/AppIcon.icns $(GUI_BUNDLE)/Contents/Resources/AppIcon.icns
-	@cp App/Resources/head*.png $(GUI_BUNDLE)/Contents/Resources/
+	@cp App/Resources/* $(GUI_BUNDLE)/Contents/Resources/
 	@cp -R $(DRIVER_BUNDLE) $(GUI_BUNDLE)/Contents/Resources/Pouet.driver
 	codesign --force --sign - --entitlements App/entitlements.plist $(GUI_BUNDLE)
 	@echo "✓ GUI app built → $(GUI_BUNDLE)"
