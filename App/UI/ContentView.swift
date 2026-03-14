@@ -37,6 +37,7 @@ struct ContentView: View {
     @State private var toast: String?
     @State private var selectedTab = 0
     @State private var showUninstallConfirm = false
+    @State private var windowSearchText = ""
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -438,6 +439,14 @@ struct ContentView: View {
 
     // MARK: - Video Tab
 
+    private var filteredWindows: [WindowInfo] {
+        let query = windowSearchText.trimmingCharacters(in: .whitespaces).lowercased()
+        if query.isEmpty { return app.video.availableWindows }
+        return app.video.availableWindows.filter {
+            $0.title.lowercased().contains(query) || $0.appName.lowercased().contains(query)
+        }
+    }
+
     private var videoTab: some View {
         VStack(spacing: 16) {
             // Window picker
@@ -469,9 +478,24 @@ struct ContentView: View {
                             Spacer()
                         }
                     } else {
+                        // Filter text field
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(Theme.dimText)
+                            TextField("Filter windows...", text: $windowSearchText)
+                                .font(.system(size: 12, weight: .medium))
+                                .textFieldStyle(.plain)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(Theme.bg)
+                        .cornerRadius(10)
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border.opacity(0.3), lineWidth: 1.5))
+
                         ScrollView {
                             VStack(spacing: 6) {
-                                ForEach(app.video.availableWindows) { window in
+                                ForEach(filteredWindows) { window in
                                     windowRow(window)
                                 }
                             }
