@@ -57,7 +57,8 @@ struct ContentView: View {
                     Group {
                         switch selectedTab {
                         case 0: soundsTab
-                        case 1: settingsTab
+                        case 1: videoTab
+                        case 2: settingsTab
                         default: soundsTab
                         }
                     }
@@ -179,7 +180,8 @@ struct ContentView: View {
     private var tabBar: some View {
         HStack(spacing: 8) {
             tabButton("Sounds", icon: "music.note.list", index: 0)
-            tabButton("Settings", icon: "gearshape.fill", index: 1)
+            tabButton("Video", icon: "video.fill", index: 1)
+            tabButton("Settings", icon: "gearshape.fill", index: 2)
             Spacer()
         }
     }
@@ -431,6 +433,267 @@ struct ContentView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 14)
                 .stroke(isActive ? Theme.accent : Theme.border.opacity(0.3), lineWidth: isActive ? Theme.borderW : 1.5)
+        )
+    }
+
+    // MARK: - Video Tab
+
+    private var videoTab: some View {
+        VStack(spacing: 16) {
+            // Window picker
+            card {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 10) {
+                        sectionTitle("Window Capture", icon: "macwindow")
+                        Spacer()
+                        pillButton("Refresh", icon: "arrow.clockwise", color: Theme.accent) {
+                            Task { await app.video.refreshWindows() }
+                        }
+                    }
+
+                    if app.video.availableWindows.isEmpty {
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 10) {
+                                Image(systemName: "macwindow")
+                                    .font(.system(size: 28, weight: .bold))
+                                    .foregroundColor(Theme.dimText.opacity(0.4))
+                                Text("No windows found")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundColor(Theme.bodyText)
+                                Text("Click Refresh to scan for windows")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Theme.dimText)
+                            }
+                            .padding(.vertical, 20)
+                            Spacer()
+                        }
+                    } else {
+                        ScrollView {
+                            VStack(spacing: 6) {
+                                ForEach(app.video.availableWindows) { window in
+                                    windowRow(window)
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 180)
+                    }
+
+                    // Capture controls
+                    HStack(spacing: 12) {
+                        Button {
+                            Task {
+                                if app.video.isCapturing {
+                                    await app.video.stopCapture()
+                                    showToast("Capture stopped")
+                                } else {
+                                    do {
+                                        try await app.video.startCapture()
+                                        showToast("Capturing...")
+                                    } catch {
+                                        showToast("Capture failed: \(error.localizedDescription)")
+                                    }
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: app.video.isCapturing ? "stop.fill" : "record.circle")
+                                    .font(.system(size: 14, weight: .bold))
+                                Text(app.video.isCapturing ? "Stop" : "Start Capture")
+                                    .font(.system(size: 13, weight: .bold))
+                            }
+                            .foregroundColor(app.video.selectedWindowID != nil ? .white : Theme.dimText)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .fill(app.video.isCapturing ? Theme.coral :
+                                          app.video.selectedWindowID != nil ? Theme.accent :
+                                          Color.black.opacity(0.05))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(app.video.selectedWindowID != nil ? Theme.border : Color.clear, lineWidth: Theme.borderW)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(app.video.selectedWindowID == nil)
+
+                        Button {
+                            Task {
+                                let result = await app.video.saveSnapshot()
+                                if let url = result.url {
+                                    showToast("Saved: \(url.lastPathComponent)")
+                                } else {
+                                    showToast("Save failed: \(result.error ?? "unknown")")
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "camera.fill")
+                                    .font(.system(size: 14, weight: .bold))
+                                Text("Save (\(Int(app.video.bufferDurationSeconds))s)")
+                                    .font(.system(size: 13, weight: .bold))
+                            }
+                            .foregroundColor(app.video.isCapturing ? .white : Theme.dimText)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .fill(app.video.isCapturing ? Theme.purple : Color.black.opacity(0.05))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(app.video.isCapturing ? Theme.border : Color.clear, lineWidth: Theme.borderW)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!app.video.isCapturing)
+                    }
+
+                    // Options row
+                    HStack(spacing: 16) {
+                        Toggle(isOn: Binding(
+                            get: { app.video.captureAudio },
+                            set: { app.setVideoCaptureAudio($0) }
+                        )) {
+                            HStack(spacing: 5) {
+                                Image(systemName: "speaker.wave.2")
+                                    .font(.system(size: 11, weight: .bold))
+                                Text("Capture audio")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .foregroundColor(Theme.bodyText)
+                        }
+                        .toggleStyle(.checkbox)
+
+                        Spacer()
+
+                        HStack(spacing: 6) {
+                            Text("Buffer:")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(Theme.bodyText)
+                            Text("\(Int(app.video.bufferDurationSeconds))s")
+                                .font(.system(size: 13, weight: .heavy, design: .monospaced))
+                                .foregroundColor(Theme.bodyText)
+                            Slider(value: Binding(
+                                get: { app.video.bufferDurationSeconds },
+                                set: { app.setVideoBufferSeconds($0) }
+                            ), in: 1...10, step: 1)
+                            .tint(Theme.accent)
+                            .frame(width: 100)
+                        }
+                    }
+                }
+            }
+
+            // Recent video snapshots
+            if !app.video.recentVideoSnapshots.isEmpty {
+                card {
+                    VStack(alignment: .leading, spacing: 14) {
+                        sectionTitle("Video Snapshots", icon: "film")
+
+                        VStack(spacing: 8) {
+                            ForEach(app.video.recentVideoSnapshots, id: \.absoluteString) { url in
+                                videoSnapshotRow(url: url)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear {
+            Task { await app.video.refreshWindows() }
+            app.video.refreshVideoSnapshots()
+        }
+    }
+
+    private func windowRow(_ window: WindowInfo) -> some View {
+        let isSelected = app.video.selectedWindowID == window.id
+        return HStack(spacing: 10) {
+            if let icon = window.appIcon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: 24, height: 24)
+                    .cornerRadius(4)
+            } else {
+                Image(systemName: "app.fill")
+                    .font(.system(size: 16))
+                    .foregroundColor(Theme.dimText)
+                    .frame(width: 24, height: 24)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(window.title)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(Theme.bodyText)
+                    .lineLimit(1)
+                Text(window.appName)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(Theme.dimText)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(Theme.accent)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(isSelected ? Theme.accent.opacity(0.1) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isSelected ? Theme.accent : Theme.border.opacity(0.15), lineWidth: isSelected ? 2 : 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            app.video.selectedWindowID = window.id
+        }
+    }
+
+    private func videoSnapshotRow(url: URL) -> some View {
+        let displayName = (url.lastPathComponent as NSString).deletingPathExtension
+
+        return HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Theme.purple.opacity(0.1))
+                    .frame(width: 34, height: 34)
+                Image(systemName: "film")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(Theme.purple)
+            }
+
+            Text(displayName)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(Theme.bodyText)
+                .lineLimit(1)
+
+            Spacer()
+
+            circleButton(icon: "folder") {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+
+            circleButton(icon: "play.fill") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Theme.cardBg)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Theme.border.opacity(0.3), lineWidth: 1.5)
         )
     }
 
