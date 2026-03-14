@@ -46,6 +46,8 @@ class VideoService: ObservableObject {
     private var segmentAudioInput: AVAssetWriterInput?
     private var segmentStartTime: CMTime?
     private var firstSampleTime: CMTime?
+    private var captureWidth: Int = 1920
+    private var captureHeight: Int = 1080
     private let writerQueue = DispatchQueue(label: "com.pouet.video.writer")
 
     private var tempDir: URL {
@@ -157,6 +159,8 @@ class VideoService: ObservableObject {
             try newStream.addStreamOutput(streamOutput!, type: .audio, sampleHandlerQueue: audioQueue)
         }
 
+        captureWidth = config.width
+        captureHeight = config.height
         stream = newStream
         firstSampleTime = nil
         try await newStream.startCapture()
@@ -328,8 +332,8 @@ class VideoService: ObservableObject {
 
         let videoSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: 1920,
-            AVVideoHeightKey: 1080,
+            AVVideoWidthKey: captureWidth,
+            AVVideoHeightKey: captureHeight,
             AVVideoCompressionPropertiesKey: [
                 AVVideoAverageBitRateKey: 4_000_000,
                 AVVideoMaxKeyFrameIntervalKey: 30,
