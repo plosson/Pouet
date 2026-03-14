@@ -38,7 +38,8 @@ struct ContentView: View {
     @State private var toast: String?
     @State private var selectedTab = 0
     @State private var showUninstallConfirm = false
-    @State private var windowSearchText = ""
+    @State private var soundFilterText = ""
+    @State private var recPulse = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -50,7 +51,6 @@ struct ContentView: View {
                     .padding(.top, 12)
                     .padding(.bottom, 8)
 
-                // Tab bar
                 tabBar
                     .padding(.horizontal, 20)
                     .padding(.bottom, 12)
@@ -58,26 +58,23 @@ struct ContentView: View {
                 ScrollView {
                     Group {
                         switch selectedTab {
-                        case 0: soundsTab
-                        case 1: videoTab
+                        case 0: controlCenterTab
+                        case 1: libraryTab
                         case 2: settingsTab
-                        default: soundsTab
+                        default: controlCenterTab
                         }
                     }
                     .padding(.horizontal, 20)
                     .padding(.bottom, 20)
                 }
 
-                // Signal levels footer
                 if selectedTab == 0 {
                     levelsFooter
                 }
 
-                // Version bar
                 versionBar
             }
 
-            // Toast overlay
             if let msg = toast {
                 toastView(msg)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -97,14 +94,11 @@ struct ContentView: View {
 
     private var headerBar: some View {
         HStack(spacing: 12) {
-            // App title
             HStack(spacing: 8) {
                 Text("Pouet")
                     .font(.system(size: 22, weight: .heavy))
                     .foregroundColor(Theme.bodyText)
                     .tracking(-0.5)
-
-                // Pill badge
                 Text("AUDIO")
                     .font(.system(size: 9, weight: .heavy))
                     .tracking(1.5)
@@ -117,7 +111,6 @@ struct ContentView: View {
 
             Spacer()
 
-            // Mic selector
             devicePill(
                 icon: "mic.fill",
                 label: app.selectedDevice.isEmpty ? "Select mic" : app.selectedDevice,
@@ -129,7 +122,6 @@ struct ContentView: View {
                 }
             }
 
-            // Speaker selector
             devicePill(
                 icon: "speaker.wave.2.fill",
                 label: app.selectedOutputDevice.isEmpty ? "Select output" : app.selectedOutputDevice,
@@ -181,8 +173,8 @@ struct ContentView: View {
 
     private var tabBar: some View {
         HStack(spacing: 8) {
-            tabButton("Sounds", icon: "music.note.list", index: 0)
-            tabButton("Video", icon: "video.fill", index: 1)
+            tabButton("Control Center", icon: "square.grid.2x2", index: 0)
+            tabButton("Library", icon: "tray.full.fill", index: 1)
             tabButton("Settings", icon: "gearshape.fill", index: 2)
             Spacer()
         }
@@ -215,22 +207,17 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Sounds Tab
+    // MARK: - Control Center Tab
 
-    private var soundsTab: some View {
+    private var controlCenterTab: some View {
         VStack(spacing: 16) {
-            // INJECT section
+            // Audio card
             card {
                 VStack(alignment: .leading, spacing: 14) {
+                    // Inject header
                     HStack(spacing: 10) {
-                        sectionTitle("Inject", icon: "music.note.list")
-
+                        sectionTitle("Audio", icon: "waveform")
                         Spacer()
-
-                        pillButton("Refresh", icon: "arrow.clockwise", color: Theme.accent) {
-                            app.refreshSounds()
-                            showToast("Sounds refreshed")
-                        }
 
                         if app.injectingURL != nil {
                             pillButton("Stop", icon: "stop.fill", color: Theme.coral) {
@@ -246,21 +233,22 @@ struct ContentView: View {
                         }
                     }
 
+                    // Inject sub-section
                     if app.sounds.isEmpty {
                         HStack {
                             Spacer()
-                            VStack(spacing: 10) {
+                            VStack(spacing: 8) {
                                 Image(systemName: "music.note")
-                                    .font(.system(size: 28, weight: .bold))
+                                    .font(.system(size: 24, weight: .bold))
                                     .foregroundColor(Theme.dimText.opacity(0.4))
                                 Text("No sounds yet")
-                                    .font(.system(size: 14, weight: .bold))
+                                    .font(.system(size: 13, weight: .bold))
                                     .foregroundColor(Theme.bodyText)
                                 Text("Drop audio files in your sounds folder")
-                                    .font(.system(size: 12))
+                                    .font(.system(size: 11))
                                     .foregroundColor(Theme.dimText)
                             }
-                            .padding(.vertical, 20)
+                            .padding(.vertical, 16)
                             Spacer()
                         }
                     } else {
@@ -273,14 +261,10 @@ struct ContentView: View {
                             }
                         }
                     }
-                }
-            }
 
-            // CAPTURE section
-            card {
-                VStack(alignment: .leading, spacing: 14) {
-                    sectionTitle("Capture", icon: "record.circle")
+                    separator
 
+                    // Snapshot sub-section
                     Button {
                         let result = app.saveDashcamSnapshot()
                         if let url = result.url {
@@ -292,7 +276,7 @@ struct ContentView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "camera.fill")
                                 .font(.system(size: 14, weight: .bold))
-                            Text("Save Snapshot (\(Int(app.dashcamBufferSeconds))s)")
+                            Text("Save Audio Snapshot (\(Int(app.dashcamBufferSeconds))s)")
                                 .font(.system(size: 13, weight: .bold))
                         }
                         .foregroundColor(app.speakerProxyRunning ? .white : Theme.dimText)
@@ -309,17 +293,148 @@ struct ContentView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(!app.speakerProxyRunning)
+                }
+            }
 
-                    if !app.recentSnapshots.isEmpty {
-                        VStack(spacing: 8) {
-                            ForEach(app.recentSnapshots, id: \.absoluteString) { url in
-                                snapshotRow(url: url)
+            // Video card
+            card {
+                VStack(alignment: .leading, spacing: 14) {
+                    sectionTitle("Video", icon: "video.fill")
+
+                    // Window dropdown
+                    HStack(spacing: 10) {
+                        Text("Window")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(Theme.bodyText)
+
+                        Menu {
+                            Button("Refresh Windows") {
+                                Task { await video.refreshWindows() }
                             }
+                            Divider()
+                            Button("None") {
+                                video.selectedWindowID = nil
+                                Task { await video.stopCapture() }
+                            }
+                            ForEach(video.availableWindows) { window in
+                                Button {
+                                    video.selectedWindowID = window.id
+                                    Task { try? await video.startCapture() }
+                                } label: {
+                                    Text("\(window.appName) — \(window.title)")
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(selectedWindowTitle)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(video.selectedWindowID != nil ? Theme.bodyText : Theme.dimText)
+                                    .lineLimit(1)
+                                Spacer()
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(Theme.dimText)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity)
+                            .background(Theme.bg)
+                            .cornerRadius(10)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(Theme.border.opacity(0.3), lineWidth: 1.5)
+                            )
                         }
                     }
+
+                    // Status line + audio toggle
+                    HStack(spacing: 10) {
+                        if video.isCapturing {
+                            Circle()
+                                .fill(Theme.coral)
+                                .frame(width: 8, height: 8)
+                                .opacity(recPulse ? 1.0 : 0.3)
+                                .onAppear {
+                                    withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                                        recPulse = true
+                                    }
+                                }
+                                .onDisappear { recPulse = false }
+                            Text("REC")
+                                .font(.system(size: 11, weight: .heavy))
+                                .foregroundColor(Theme.coral)
+                            Text(selectedWindowTitle)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(Theme.dimText)
+                                .lineLimit(1)
+                        } else {
+                            Text("No window selected")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(Theme.dimText)
+                        }
+
+                        Spacer()
+
+                        Toggle(isOn: Binding(
+                            get: { video.captureAudio },
+                            set: { app.setVideoCaptureAudio($0) }
+                        )) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "speaker.wave.2")
+                                    .font(.system(size: 10, weight: .bold))
+                                Text("Audio")
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                            .foregroundColor(Theme.bodyText)
+                        }
+                        .toggleStyle(.checkbox)
+                    }
+
+                    // Save video snapshot button
+                    Button {
+                        Task {
+                            let result = await video.saveSnapshot()
+                            if let url = result.url {
+                                showToast("Saved: \(url.lastPathComponent)")
+                            } else {
+                                showToast("Save failed: \(result.error ?? "unknown")")
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "camera.fill")
+                                .font(.system(size: 14, weight: .bold))
+                            Text("Save Video Snapshot (\(Int(video.bufferDurationSeconds))s)")
+                                .font(.system(size: 13, weight: .bold))
+                        }
+                        .foregroundColor(video.isCapturing ? .white : Theme.dimText)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(video.isCapturing ? Theme.purple : Color.black.opacity(0.05))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(video.isCapturing ? Theme.border : Color.clear, lineWidth: Theme.borderW)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!video.isCapturing)
                 }
             }
         }
+        .onAppear {
+            Task { await video.refreshWindows() }
+        }
+    }
+
+    private var selectedWindowTitle: String {
+        guard let id = video.selectedWindowID,
+              let window = video.availableWindows.first(where: { $0.id == id }) else {
+            return "Select window..."
+        }
+        return "\(window.appName) — \(window.title)"
     }
 
     private func soundCard(name: String) -> some View {
@@ -331,7 +446,6 @@ struct ContentView: View {
         let displayName = (name as NSString).deletingPathExtension
 
         return HStack(spacing: 10) {
-            // Icon block
             ZStack {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(isActive ? Theme.accent.opacity(0.15) : Theme.purple.opacity(0.1))
@@ -390,18 +504,128 @@ struct ContentView: View {
                 radius: 4, x: 0, y: 2)
     }
 
-    private func snapshotRow(url: URL) -> some View {
-        let isPreviewing = app.previewingURL == url
+    // MARK: - Library Tab
+
+    private var filteredSounds: [String] {
+        let query = soundFilterText.trimmingCharacters(in: .whitespaces).lowercased()
+        if query.isEmpty { return app.sounds }
+        return app.sounds.filter { $0.lowercased().contains(query) }
+    }
+
+    private var libraryTab: some View {
+        VStack(spacing: 16) {
+            // Sounds card
+            card {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 10) {
+                        sectionTitle("Sounds", icon: "music.note.list")
+                        Spacer()
+                        pillButton("Refresh", icon: "arrow.clockwise", color: Theme.accent) {
+                            app.refreshSounds()
+                            showToast("Sounds refreshed")
+                        }
+                        circleButton(icon: "folder.fill") {
+                            if !app.soundsDir.isEmpty {
+                                NSWorkspace.shared.open(URL(fileURLWithPath: app.soundsDir))
+                            }
+                        }
+                    }
+
+                    if !app.sounds.isEmpty {
+                        // Filter
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(Theme.dimText)
+                            TextField("Filter sounds...", text: $soundFilterText)
+                                .font(.system(size: 12, weight: .medium))
+                                .textFieldStyle(.plain)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(Theme.bg)
+                        .cornerRadius(10)
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border.opacity(0.3), lineWidth: 1.5))
+                    }
+
+                    if app.sounds.isEmpty {
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 10) {
+                                Image(systemName: "music.note")
+                                    .font(.system(size: 28, weight: .bold))
+                                    .foregroundColor(Theme.dimText.opacity(0.4))
+                                Text("No sounds yet")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundColor(Theme.bodyText)
+                                Text("Drop audio files in your sounds folder")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Theme.dimText)
+                            }
+                            .padding(.vertical, 20)
+                            Spacer()
+                        }
+                    } else {
+                        VStack(spacing: 8) {
+                            ForEach(filteredSounds, id: \.self) { name in
+                                soundRow(name: name)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Recordings card
+            card {
+                VStack(alignment: .leading, spacing: 14) {
+                    sectionTitle("Recordings", icon: "record.circle")
+
+                    if app.allRecordings.isEmpty {
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 8) {
+                                Image(systemName: "record.circle")
+                                    .font(.system(size: 24, weight: .bold))
+                                    .foregroundColor(Theme.dimText.opacity(0.4))
+                                Text("No recordings yet")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundColor(Theme.bodyText)
+                                Text("Use Control Center to save audio or video snapshots")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(Theme.dimText)
+                            }
+                            .padding(.vertical, 16)
+                            Spacer()
+                        }
+                    } else {
+                        VStack(spacing: 8) {
+                            ForEach(app.allRecordings) { item in
+                                recordingRow(item: item)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear {
+            app.refreshAllSnapshots()
+        }
+    }
+
+    private func soundRow(name: String) -> some View {
+        let url = URL(fileURLWithPath: (app.soundsDir as NSString).appendingPathComponent(name))
         let isInjecting = app.injectingURL == url
-        let isActive = isPreviewing || isInjecting
-        let displayName = (url.lastPathComponent as NSString).deletingPathExtension
+        let isPreviewing = app.previewingURL == url
+        let isActive = isInjecting || isPreviewing
+        let ext = (name as NSString).pathExtension.uppercased()
+        let displayName = (name as NSString).deletingPathExtension
 
         return HStack(spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10)
                     .fill(isActive ? Theme.accent.opacity(0.15) : Theme.purple.opacity(0.1))
                     .frame(width: 34, height: 34)
-                Image(systemName: isActive ? "waveform" : "mic.fill")
+                Image(systemName: isActive ? "waveform" : "music.note")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundColor(isActive ? Theme.accent : Theme.purple)
             }
@@ -411,11 +635,21 @@ struct ContentView: View {
                 .foregroundColor(Theme.bodyText)
                 .lineLimit(1)
 
-            Spacer()
+            Text(ext)
+                .font(.system(size: 9, weight: .heavy))
+                .foregroundColor(Theme.dimText)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(Theme.bg)
+                .cornerRadius(4)
 
-            circleButton(icon: "folder") {
-                NSWorkspace.shared.activateFileViewerSelecting([url])
+            if let dur = app.soundDurations[name] {
+                Text(formatDuration(dur))
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(Theme.dimText)
             }
+
+            Spacer()
 
             playbackButton(active: isPreviewing, icon: "headphones", size: 28, help: "Play for me only") {
                 if isPreviewing { app.stopPreview() }
@@ -438,265 +672,22 @@ struct ContentView: View {
         )
     }
 
-    // MARK: - Video Tab
-
-    private var filteredWindows: [WindowInfo] {
-        let query = windowSearchText.trimmingCharacters(in: .whitespaces).lowercased()
-        if query.isEmpty { return video.availableWindows }
-        return video.availableWindows.filter {
-            $0.title.lowercased().contains(query) || $0.appName.lowercased().contains(query)
-        }
-    }
-
-    private var videoTab: some View {
-        VStack(spacing: 16) {
-            // Window picker
-            card {
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(spacing: 10) {
-                        sectionTitle("Window Capture", icon: "macwindow")
-                        Spacer()
-                        pillButton("Refresh", icon: "arrow.clockwise", color: Theme.accent) {
-                            Task { await video.refreshWindows() }
-                        }
-                    }
-
-                    if video.availableWindows.isEmpty {
-                        HStack {
-                            Spacer()
-                            VStack(spacing: 10) {
-                                Image(systemName: "macwindow")
-                                    .font(.system(size: 28, weight: .bold))
-                                    .foregroundColor(Theme.dimText.opacity(0.4))
-                                Text("No windows found")
-                                    .font(.system(size: 14, weight: .bold))
-                                    .foregroundColor(Theme.bodyText)
-                                Text("Click Refresh to scan for windows")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(Theme.dimText)
-                            }
-                            .padding(.vertical, 20)
-                            Spacer()
-                        }
-                    } else {
-                        // Filter text field
-                        HStack(spacing: 8) {
-                            Image(systemName: "magnifyingglass")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundColor(Theme.dimText)
-                            TextField("Filter windows...", text: $windowSearchText)
-                                .font(.system(size: 12, weight: .medium))
-                                .textFieldStyle(.plain)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(Theme.bg)
-                        .cornerRadius(10)
-                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border.opacity(0.3), lineWidth: 1.5))
-
-                        ScrollView {
-                            VStack(spacing: 6) {
-                                ForEach(filteredWindows) { window in
-                                    windowRow(window)
-                                }
-                            }
-                        }
-                        .frame(maxHeight: 180)
-                    }
-
-                    // Capture controls
-                    HStack(spacing: 12) {
-                        Button {
-                            Task {
-                                if video.isCapturing {
-                                    await video.stopCapture()
-                                    showToast("Capture stopped")
-                                } else {
-                                    do {
-                                        try await video.startCapture()
-                                        showToast("Capturing...")
-                                    } catch {
-                                        showToast("Capture failed: \(error.localizedDescription)")
-                                    }
-                                }
-                            }
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: video.isCapturing ? "stop.fill" : "record.circle")
-                                    .font(.system(size: 14, weight: .bold))
-                                Text(video.isCapturing ? "Stop" : "Start Capture")
-                                    .font(.system(size: 13, weight: .bold))
-                            }
-                            .foregroundColor(video.selectedWindowID != nil ? .white : Theme.dimText)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(
-                                RoundedRectangle(cornerRadius: 14)
-                                    .fill(video.isCapturing ? Theme.coral :
-                                          video.selectedWindowID != nil ? Theme.accent :
-                                          Color.black.opacity(0.05))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14)
-                                    .stroke(video.selectedWindowID != nil ? Theme.border : Color.clear, lineWidth: Theme.borderW)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(video.selectedWindowID == nil)
-
-                        Button {
-                            Task {
-                                let result = await video.saveSnapshot()
-                                if let url = result.url {
-                                    showToast("Saved: \(url.lastPathComponent)")
-                                } else {
-                                    showToast("Save failed: \(result.error ?? "unknown")")
-                                }
-                            }
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "camera.fill")
-                                    .font(.system(size: 14, weight: .bold))
-                                Text("Save (\(Int(video.bufferDurationSeconds))s)")
-                                    .font(.system(size: 13, weight: .bold))
-                            }
-                            .foregroundColor(video.isCapturing ? .white : Theme.dimText)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(
-                                RoundedRectangle(cornerRadius: 14)
-                                    .fill(video.isCapturing ? Theme.purple : Color.black.opacity(0.05))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14)
-                                    .stroke(video.isCapturing ? Theme.border : Color.clear, lineWidth: Theme.borderW)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!video.isCapturing)
-                    }
-
-                    // Options row
-                    HStack(spacing: 16) {
-                        Toggle(isOn: Binding(
-                            get: { video.captureAudio },
-                            set: { app.setVideoCaptureAudio($0) }
-                        )) {
-                            HStack(spacing: 5) {
-                                Image(systemName: "speaker.wave.2")
-                                    .font(.system(size: 11, weight: .bold))
-                                Text("Capture audio")
-                                    .font(.system(size: 12, weight: .semibold))
-                            }
-                            .foregroundColor(Theme.bodyText)
-                        }
-                        .toggleStyle(.checkbox)
-
-                        Spacer()
-
-                        HStack(spacing: 6) {
-                            Text("Buffer:")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundColor(Theme.bodyText)
-                            Text("\(Int(video.bufferDurationSeconds))s")
-                                .font(.system(size: 13, weight: .heavy, design: .monospaced))
-                                .foregroundColor(Theme.bodyText)
-                            Slider(value: Binding(
-                                get: { video.bufferDurationSeconds },
-                                set: { app.setVideoBufferSeconds($0) }
-                            ), in: 1...10, step: 1)
-                            .tint(Theme.accent)
-                            .frame(width: 100)
-                        }
-                    }
-                }
-            }
-
-            // Recent video snapshots
-            if !video.recentVideoSnapshots.isEmpty {
-                card {
-                    VStack(alignment: .leading, spacing: 14) {
-                        sectionTitle("Video Snapshots", icon: "film")
-
-                        VStack(spacing: 8) {
-                            ForEach(video.recentVideoSnapshots, id: \.absoluteString) { url in
-                                videoSnapshotRow(url: url)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .onAppear {
-            Task { await video.refreshWindows() }
-            video.refreshVideoSnapshots()
-        }
-    }
-
-    private func windowRow(_ window: WindowInfo) -> some View {
-        let isSelected = video.selectedWindowID == window.id
-        return Button {
-            video.selectedWindowID = window.id
-        } label: {
-            HStack(spacing: 10) {
-                if let icon = window.appIcon {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .frame(width: 24, height: 24)
-                        .cornerRadius(4)
-                } else {
-                    Image(systemName: "app.fill")
-                        .font(.system(size: 16))
-                        .foregroundColor(Theme.dimText)
-                        .frame(width: 24, height: 24)
-                }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(window.title)
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(Theme.bodyText)
-                        .lineLimit(1)
-                    Text(window.appName)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(Theme.dimText)
-                        .lineLimit(1)
-                }
-
-                Spacer()
-
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(Theme.accent)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(isSelected ? Theme.accent.opacity(0.1) : Theme.bg)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? Theme.accent : Theme.border.opacity(0.15), lineWidth: 1.5)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func videoSnapshotRow(url: URL) -> some View {
+    private func recordingRow(item: RecordingItem) -> some View {
+        let url = item.url
+        let isPreviewing = app.previewingURL == url
+        let isInjecting = app.injectingURL == url
+        let isActive = isPreviewing || isInjecting
         let displayName = (url.lastPathComponent as NSString).deletingPathExtension
+        let isAudio = item.kind == .audio
 
         return HStack(spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(Theme.purple.opacity(0.1))
+                    .fill(isActive ? Theme.accent.opacity(0.15) : Theme.purple.opacity(0.1))
                     .frame(width: 34, height: 34)
-                Image(systemName: "film")
+                Image(systemName: isAudio ? (isActive ? "waveform" : "mic.fill") : "film")
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundColor(Theme.purple)
+                    .foregroundColor(isActive ? Theme.accent : Theme.purple)
             }
 
             Text(displayName)
@@ -710,8 +701,20 @@ struct ContentView: View {
                 NSWorkspace.shared.activateFileViewerSelecting([url])
             }
 
-            circleButton(icon: "play.fill") {
-                NSWorkspace.shared.open(url)
+            if isAudio {
+                playbackButton(active: isPreviewing, icon: "headphones", size: 28, help: "Play for me only") {
+                    if isPreviewing { app.stopPreview() }
+                    else { app.preview(url: url) }
+                }
+
+                playbackButton(active: isInjecting, icon: "mic.fill", size: 28, help: "Play for everyone") {
+                    if isInjecting { app.stopInjection() }
+                    else { app.inject(url: url) }
+                }
+            } else {
+                circleButton(icon: "play.fill") {
+                    NSWorkspace.shared.open(url)
+                }
             }
         }
         .padding(10)
@@ -721,7 +724,7 @@ struct ContentView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14)
-                .stroke(Theme.border.opacity(0.3), lineWidth: 1.5)
+                .stroke(isActive ? Theme.accent : Theme.border.opacity(0.3), lineWidth: isActive ? Theme.borderW : 1.5)
         )
     }
 
@@ -762,7 +765,7 @@ struct ContentView: View {
 
             // Two columns
             HStack(alignment: .top, spacing: 14) {
-                // Left: Audio Controls
+                // Left: Audio & Video Controls
                 card {
                     VStack(alignment: .leading, spacing: 14) {
                         sectionTitle("Audio Controls", icon: "speaker.wave.2.fill")
@@ -790,9 +793,9 @@ struct ContentView: View {
 
                         separator
 
-                        // Capture Buffer
+                        // Audio Capture Buffer
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Capture Buffer")
+                            Text("Audio Buffer")
                                 .font(.system(size: 12, weight: .bold))
                                 .foregroundColor(Theme.bodyText)
                             HStack(spacing: 10) {
@@ -805,7 +808,30 @@ struct ContentView: View {
                                 }
                                 .tint(Theme.accent)
                             }
-                            Text("Rolling buffer for capture snapshots")
+                            Text("Rolling buffer for audio snapshots")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(Theme.dimText)
+                        }
+
+                        separator
+
+                        // Video Capture Buffer
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Video Buffer")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(Theme.bodyText)
+                            HStack(spacing: 10) {
+                                Text("\(Int(video.bufferDurationSeconds))s")
+                                    .font(.system(size: 13, weight: .heavy, design: .monospaced))
+                                    .foregroundColor(Theme.bodyText)
+                                    .frame(width: 30, alignment: .trailing)
+                                Slider(value: Binding(
+                                    get: { video.bufferDurationSeconds },
+                                    set: { app.setVideoBufferSeconds($0) }
+                                ), in: 1...10, step: 1)
+                                .tint(Theme.accent)
+                            }
+                            Text("Rolling buffer for video snapshots")
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundColor(Theme.dimText)
                         }
@@ -817,7 +843,7 @@ struct ContentView: View {
                             Text("Ring Buffers")
                                 .font(.system(size: 12, weight: .bold))
                                 .foregroundColor(Theme.bodyText)
-                            meterRow(label: "Mic → Apps", percent: app.mainRingPercent, color: Theme.purple)
+                            meterRow(label: "Mic -> Apps", percent: app.mainRingPercent, color: Theme.purple)
                             meterRow(label: "Inject Buffer", percent: app.injectRingPercent, color: Theme.accent)
                         }
                     }
@@ -833,14 +859,15 @@ struct ContentView: View {
                         healthRow("Mic shared memory", ok: app.shmAvailable)
                         healthRow("Speaker shared memory", ok: app.speakerShmAvailable)
                         healthRow("Microphone permission", ok: app.hasMicPermission)
+                        healthRow("Screen recording", ok: app.hasScreenRecordingPermission)
                         healthRow("Input devices found", ok: !app.devices.isEmpty)
                         healthRow("Output devices found", ok: !app.outputDevices.isEmpty)
                         healthRow("Mic proxy active", ok: app.proxyRunning)
                         healthRow("Speaker proxy active", ok: app.speakerProxyRunning)
+                        healthRow("Video capture active", ok: video.isCapturing)
 
                         separator
 
-                        // Audio Driver section
                         sectionTitle("Audio Driver", icon: "cpu")
                         HStack(spacing: 10) {
                             Circle()
@@ -893,7 +920,7 @@ struct ContentView: View {
             Text("Pouet")
                 .font(.system(size: 11, weight: .heavy))
                 .foregroundColor(Theme.bodyText)
-            Text("·")
+            Text("\u{b7}")
                 .foregroundColor(Theme.dimText)
             Text("Virtual microphone proxy with audio injection")
                 .font(.system(size: 11, weight: .medium))
