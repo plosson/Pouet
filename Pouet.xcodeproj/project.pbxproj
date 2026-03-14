@@ -1,0 +1,314 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A100000001 /* PouetGUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000001; };
+		A100000002 /* Log.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000002; };
+		A100000003 /* AppService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000003; };
+		A100000004 /* AudioService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000004; };
+		A100000005 /* AudioMixing.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000005; };
+		A100000006 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000006; };
+		A100000010 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = B100000010; };
+		A100000011 /* UninstallIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = B100000011; };
+		A100000020 /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B100000020; };
+		A100000021 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B100000021; };
+		A100000022 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B100000022; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		B100000001 /* PouetGUI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PouetGUI.swift; path = UI/PouetGUI.swift; sourceTree = "<group>"; };
+		B100000002 /* Log.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Log.swift; path = Services/Log.swift; sourceTree = "<group>"; };
+		B100000003 /* AppService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppService.swift; path = Services/AppService.swift; sourceTree = "<group>"; };
+		B100000004 /* AudioService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AudioService.swift; path = Services/AudioService.swift; sourceTree = "<group>"; };
+		B100000005 /* AudioMixing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AudioMixing.swift; path = Services/AudioMixing.swift; sourceTree = "<group>"; };
+		B100000006 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ContentView.swift; path = UI/ContentView.swift; sourceTree = "<group>"; };
+		B100000007 /* BridgingHeader.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = BridgingHeader.h; sourceTree = "<group>"; };
+		B100000008 /* shm_bridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = shm_bridge.h; sourceTree = "<group>"; };
+		B100000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B10000000A /* entitlements.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = entitlements.plist; sourceTree = "<group>"; };
+		B100000010 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
+		B100000011 /* UninstallIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = UninstallIcon.icns; sourceTree = "<group>"; };
+		B100000020 /* CoreAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreAudio.framework; path = System/Library/Frameworks/CoreAudio.framework; sourceTree = SDKROOT; };
+		B100000021 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		B100000022 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
+		B100000030 /* Pouet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pouet.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B100000040 /* PouetDriver.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = PouetDriver.c; sourceTree = "<group>"; };
+		B100000041 /* exports.lds */ = {isa = PBXFileReference; lastKnownFileType = text; path = exports.lds; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		C100000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A100000020 /* CoreAudio.framework in Frameworks */,
+				A100000021 /* AVFoundation.framework in Frameworks */,
+				A100000022 /* AudioToolbox.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		D100000001 /* Root */ = {
+			isa = PBXGroup;
+			children = (
+				D100000002 /* App */,
+				D100000003 /* Driver */,
+				D100000004 /* Frameworks */,
+				D100000005 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		D100000002 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				D100000006 /* UI */,
+				D100000007 /* Services */,
+				B100000007 /* BridgingHeader.h */,
+				B100000008 /* shm_bridge.h */,
+				B100000009 /* Info.plist */,
+				B10000000A /* entitlements.plist */,
+				B100000010 /* AppIcon.icns */,
+				B100000011 /* UninstallIcon.icns */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		D100000006 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				B100000001 /* PouetGUI.swift */,
+				B100000006 /* ContentView.swift */,
+			);
+			name = UI;
+			sourceTree = "<group>";
+		};
+		D100000007 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				B100000002 /* Log.swift */,
+				B100000003 /* AppService.swift */,
+				B100000004 /* AudioService.swift */,
+				B100000005 /* AudioMixing.swift */,
+			);
+			name = Services;
+			sourceTree = "<group>";
+		};
+		D100000003 /* Driver */ = {
+			isa = PBXGroup;
+			children = (
+				B100000040 /* PouetDriver.c */,
+				B100000041 /* exports.lds */,
+			);
+			path = Driver;
+			sourceTree = "<group>";
+		};
+		D100000004 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				B100000020 /* CoreAudio.framework */,
+				B100000021 /* AVFoundation.framework */,
+				B100000022 /* AudioToolbox.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		D100000005 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B100000030 /* Pouet.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		E100000001 /* Pouet */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F100000003 /* Build configuration list for PBXNativeTarget "Pouet" */;
+			buildPhases = (
+				E100000002 /* Sources */,
+				C100000001 /* Frameworks */,
+				E100000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Pouet;
+			productName = Pouet;
+			productReference = B100000030 /* Pouet.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E200000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+			};
+			buildConfigurationList = F100000001 /* Build configuration list for PBXProject "Pouet" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = D100000001 /* Root */;
+			productRefGroup = D100000005 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				E100000001 /* Pouet */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		E100000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A100000010 /* AppIcon.icns in Resources */,
+				A100000011 /* UninstallIcon.icns in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		E100000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A100000001 /* PouetGUI.swift in Sources */,
+				A100000002 /* Log.swift in Sources */,
+				A100000003 /* AppService.swift in Sources */,
+				A100000004 /* AudioService.swift in Sources */,
+				A100000005 /* AudioMixing.swift in Sources */,
+				A100000006 /* ContentView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		F000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		F000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		F000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/entitlements.plist;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.pouet.gui;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = App/BridgingHeader.h;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		F000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/entitlements.plist;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.pouet.gui;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = App/BridgingHeader.h;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		F100000001 /* Build configuration list for PBXProject "Pouet" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F000000001 /* Debug */,
+				F000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F100000003 /* Build configuration list for PBXNativeTarget "Pouet" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F000000003 /* Debug */,
+				F000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = E200000001 /* Project object */;
+}

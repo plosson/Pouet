@@ -22,7 +22,7 @@ DRIVER_BUNDLE = build/Pouet.driver
 DRIVER_BINARY = $(DRIVER_BUNDLE)/Contents/MacOS/PouetDriver
 DRIVER_PLIST  = Driver/Pouet.driver/Contents/Info.plist
 
-GUI_SRC       = App/PouetGUI.swift App/Log.swift App/AppService.swift App/AudioService.swift App/AudioMixing.swift App/ContentView.swift
+GUI_SRC       = App/UI/PouetGUI.swift App/Services/Log.swift App/Services/AppService.swift App/Services/AudioService.swift App/Services/AudioMixing.swift App/UI/ContentView.swift
 GUI_BUNDLE    = build/Pouet.app
 GUI_BINARY    = $(GUI_BUNDLE)/Contents/MacOS/Pouet
 GUI_BUNDLE_ID = com.pouet.gui
@@ -193,13 +193,13 @@ test-c: Tests/test_driver.c
 	@echo "--- C driver tests ---"
 	./build/test_driver
 
-test-swift: Tests/test_app.swift App/shm_bridge.h App/AudioMixing.swift
+test-swift: Tests/test_app.swift App/shm_bridge.h App/Services/AudioMixing.swift
 	@mkdir -p build
 	$(SWIFTC) $(SWIFTFLAGS) \
 	    -parse-as-library \
 	    -import-objc-header App/shm_bridge.h \
 	    -o build/test_app \
-	    Tests/test_app.swift App/AudioMixing.swift
+	    Tests/test_app.swift App/Services/AudioMixing.swift
 	@echo "--- Swift app tests ---"
 	./build/test_app
 
