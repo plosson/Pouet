@@ -83,6 +83,229 @@ private let appCards: [AppCard] = [
     ),
 ]
 
+// MARK: - Floating Heads Physics
+
+private class FloatingHead {
+    var x: CGFloat
+    var y: CGFloat
+    var vx: CGFloat
+    var vy: CGFloat
+    var rot: CGFloat = 0
+    var rotV: CGFloat
+    var size: CGFloat
+    var imageName: String
+    var bobPhase: CGFloat
+    var squashPhase: CGFloat
+
+    init(x: CGFloat, y: CGFloat, size: CGFloat, imageName: String) {
+        self.x = x
+        self.y = y
+        self.size = size
+        self.imageName = imageName
+        let speed = CGFloat.random(in: 0.3...0.8)
+        let angle = CGFloat.random(in: 0...(2 * .pi))
+        self.vx = cos(angle) * speed
+        self.vy = sin(angle) * speed
+        self.rotV = CGFloat.random(in: -0.15...0.15)
+        self.bobPhase = CGFloat.random(in: 0...(2 * .pi))
+        self.squashPhase = CGFloat.random(in: 0...(2 * .pi))
+        self.rot = CGFloat.random(in: -10...10)
+    }
+}
+
+private class FloatingHeadsState: ObservableObject {
+    @Published var tick: UInt64 = 0
+    var heads: [FloatingHead] = []
+    var mouseX: CGFloat = -1000
+    var mouseY: CGFloat = -1000
+    private var timer: Timer?
+
+    private let maxSpeed: CGFloat = 2.5
+    private let drag: CGFloat = 0.9995
+    private let minDrift: CGFloat = 0.2
+    private let fleeRadius: CGFloat = 150
+    private let fleeForce: CGFloat = 0.35
+    private let bounceRestitution: CGFloat = -0.8
+
+    func setup(width: CGFloat, height: CGFloat) {
+        guard heads.isEmpty else { return }
+        let positions: [(CGFloat, CGFloat, CGFloat, String)] = [
+            (0.08, 0.15, 70, "head1"),
+            (0.85, 0.25, 85, "head2"),
+            (0.12, 0.70, 65, "head3"),
+            (0.82, 0.60, 78, "head4"),
+        ]
+        for (fx, fy, sz, name) in positions {
+            heads.append(FloatingHead(x: fx * width, y: fy * height, size: sz, imageName: name))
+        }
+        startTimer()
+    }
+
+    func startTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            self?.step()
+        }
+    }
+
+    func stopTimer() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func step() {
+        let dt: CGFloat = 1.0
+
+        for h in heads {
+            // Drag
+            h.vx *= drag
+            h.vy *= drag
+
+            // Minimum drift nudge
+            let speed = sqrt(h.vx * h.vx + h.vy * h.vy)
+            if speed < minDrift {
+                h.vx += CGFloat.random(in: -0.1...0.1)
+                h.vy += CGFloat.random(in: -0.1...0.1)
+            }
+
+            // Speed cap
+            let curSpeed = sqrt(h.vx * h.vx + h.vy * h.vy)
+            if curSpeed > maxSpeed {
+                h.vx = h.vx / curSpeed * maxSpeed
+                h.vy = h.vy / curSpeed * maxSpeed
+            }
+
+            // Cursor flee
+            let dx = h.x + h.size / 2 - mouseX
+            let dy = h.y + h.size / 2 - mouseY
+            let dist = sqrt(dx * dx + dy * dy)
+            if dist < fleeRadius && dist > 0 {
+                let strength = fleeForce * (1 - dist / fleeRadius)
+                h.vx += (dx / dist) * strength * dt * 0.06
+                h.vy += (dy / dist) * strength * dt * 0.06
+                h.rotV += CGFloat.random(in: -0.05...0.05)
+            }
+
+            // Move
+            h.x += h.vx * dt
+            h.y += h.vy * dt
+
+            // Rotation
+            h.rotV *= 0.998
+            h.rot += h.rotV * dt * 0.05
+
+            // Bob & squash
+            h.bobPhase += 0.002 * dt
+            h.squashPhase += 0.002 * dt
+        }
+
+        // Head-to-head collisions
+        for i in 0..<heads.count {
+            for j in (i + 1)..<heads.count {
+                let a = heads[i], b = heads[j]
+                let dx = b.x + b.size / 2 - (a.x + a.size / 2)
+                let dy = b.y + b.size / 2 - (a.y + a.size / 2)
+                let dist = sqrt(dx * dx + dy * dy)
+                let minDist = (a.size + b.size) / 2 * 0.75
+                if dist < minDist && dist > 0 {
+                    let nx = dx / dist, ny = dy / dist
+                    let relV = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny
+                    if relV > 0 {
+                        a.vx -= relV * nx * 0.8
+                        a.vy -= relV * ny * 0.8
+                        b.vx += relV * nx * 0.8
+                        b.vy += relV * ny * 0.8
+                    }
+                    let overlap = (minDist - dist) / 2
+                    a.x -= nx * overlap
+                    a.y -= ny * overlap
+                    b.x += nx * overlap
+                    b.y += ny * overlap
+                    a.rotV = CGFloat.random(in: -0.6...0.6)
+                    b.rotV = CGFloat.random(in: -0.6...0.6)
+                }
+            }
+        }
+
+        tick &+= 1
+    }
+
+    func bounceWalls(width: CGFloat, height: CGFloat) {
+        for h in heads {
+            if h.x < 0 { h.x = 0; h.vx *= bounceRestitution; h.rotV = CGFloat.random(in: -0.4...0.4) }
+            if h.x + h.size > width { h.x = width - h.size; h.vx *= bounceRestitution; h.rotV = CGFloat.random(in: -0.4...0.4) }
+            if h.y < 0 { h.y = 0; h.vy *= bounceRestitution; h.rotV = CGFloat.random(in: -0.4...0.4) }
+            if h.y + h.size > height { h.y = height - h.size; h.vy *= bounceRestitution; h.rotV = CGFloat.random(in: -0.4...0.4) }
+        }
+    }
+}
+
+private struct FloatingHeadsView: View {
+    @ObservedObject var state: FloatingHeadsState
+    @State private var viewOrigin: CGPoint = .zero
+
+    var body: some View {
+        GeometryReader { geo in
+            let _ = state.bounceWalls(width: geo.size.width, height: geo.size.height)
+            ZStack {
+                ForEach(0..<state.heads.count, id: \.self) { i in
+                    let h = state.heads[i]
+                    let bobY = sin(h.bobPhase) * 5
+                    let squash = 1 + sin(h.squashPhase) * 0.035
+                    let stretch = 1 - sin(h.squashPhase) * 0.035
+                    headImage(h.imageName, size: h.size)
+                        .rotationEffect(.degrees(h.rot))
+                        .scaleEffect(x: stretch, y: squash)
+                        .position(x: h.x + h.size / 2, y: h.y + h.size / 2 + bobY)
+                }
+            }
+            .onAppear {
+                state.setup(width: geo.size.width, height: geo.size.height)
+            }
+            .background(
+                GeometryReader { inner in
+                    Color.clear.onAppear {
+                        viewOrigin = inner.frame(in: .global).origin
+                    }.onChange(of: inner.frame(in: .global).origin) { newOrigin in
+                        viewOrigin = newOrigin
+                    }
+                }
+            )
+        }
+        .allowsHitTesting(false)
+        .onAppear { startMouseTracking() }
+        .onDisappear { state.stopTimer() }
+    }
+
+    private func startMouseTracking() {
+        NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { event in
+            if let window = NSApp.mainWindow {
+                let windowPoint = event.locationInWindow
+                let flipped = NSPoint(x: windowPoint.x - viewOrigin.x, y: window.frame.height - windowPoint.y - viewOrigin.y)
+                state.mouseX = flipped.x
+                state.mouseY = flipped.y
+            }
+            return event
+        }
+    }
+
+    private func headImage(_ name: String, size: CGFloat) -> some View {
+        Group {
+            if let resourcePath = Bundle.main.path(forResource: name, ofType: "png"),
+               let nsImage = NSImage(contentsOfFile: resourcePath) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: size, height: size)
+            } else {
+                Circle()
+                    .fill(Theme.purple.opacity(0.3))
+                    .frame(width: size, height: size)
+            }
+        }
+    }
+}
+
 // MARK: - Main View
 
 struct ContentView: View {
@@ -96,6 +319,7 @@ struct ContentView: View {
     @State private var soundFilterText = ""
     @State private var recPulse = false
     @State private var cardHover: String? = nil
+    @StateObject private var floatingHeads = FloatingHeadsState()
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -130,7 +354,10 @@ struct ContentView: View {
     // MARK: - Home Screen
 
     private var homeScreen: some View {
-        VStack(spacing: 0) {
+        ZStack {
+            FloatingHeadsView(state: floatingHeads)
+
+            VStack(spacing: 0) {
             ScrollView {
                 VStack(spacing: 24) {
                     // Hero
@@ -200,6 +427,7 @@ struct ContentView: View {
 
             versionBar
         }
+        } // ZStack
     }
 
     private func homeAppCard(_ appCard: AppCard) -> some View {
