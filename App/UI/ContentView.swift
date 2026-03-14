@@ -82,6 +82,11 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(.light)
+        .onReceive(NotificationCenter.default.publisher(for: .hotkeyToast)) { notification in
+            if let msg = notification.object as? String {
+                showToast(msg)
+            }
+        }
         .alert("Uninstall Driver", isPresented: $showUninstallConfirm) {
             Button("Cancel", role: .cancel) {}
             Button("Uninstall", role: .destructive) { performUninstall() }

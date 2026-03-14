@@ -58,6 +58,7 @@ struct AppConfig: Codable {
 class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     let audio: AudioService
     let video = VideoService()
+    let hotkey = HotkeyService()
 
     // MARK: - Published State
 
@@ -190,9 +191,11 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         }
 
         startPolling()
+        startHotkeys()
     }
 
     func shutdown() {
+        hotkey.stop()
         stopPolling()
         audio.stopProxy()
         audio.stopSpeakerProxy()
@@ -487,6 +490,34 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     var speakerShmAvailable: Bool { audio.speakerRing != nil }
     var shmAvailable: Bool { audio.mainRing != nil && audio.injectRing != nil }
     var hasScreenRecordingPermission: Bool { CGPreflightScreenCaptureAccess() }
+
+    private func startHotkeys() {
+        hotkey.onAudioSnapshot = { [weak self] in
+            guard let self = self else { return }
+            let result = self.saveDashcamSnapshot()
+            if let url = result.url {
+                Log.info("Hotkey: audio snapshot saved — \(url.lastPathComponent)")
+                NotificationCenter.default.post(name: .hotkeyToast, object: "Audio saved: \(url.lastPathComponent)")
+            } else {
+                NotificationCenter.default.post(name: .hotkeyToast, object: result.error ?? "Audio snapshot failed")
+            }
+        }
+        hotkey.onVideoSnapshot = { [weak self] in
+            guard let self = self else { return }
+            Task {
+                let result = await self.video.saveSnapshot()
+                await MainActor.run {
+                    if let url = result.url {
+                        Log.info("Hotkey: video snapshot saved — \(url.lastPathComponent)")
+                        NotificationCenter.default.post(name: .hotkeyToast, object: "Video saved: \(url.lastPathComponent)")
+                    } else {
+                        NotificationCenter.default.post(name: .hotkeyToast, object: result.error ?? "Video snapshot failed")
+                    }
+                }
+            }
+        }
+        hotkey.start()
+    }
 
     private func startPolling() {
         pollTimer?.invalidate()

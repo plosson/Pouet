@@ -42,4 +42,5 @@ struct PouetGUI: App {
 
 extension Notification.Name {
     static let requestUninstall = Notification.Name("requestUninstall")
+    static let hotkeyToast = Notification.Name("hotkeyToast")
 }

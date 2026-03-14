@@ -22,7 +22,7 @@ DRIVER_BUNDLE = build/Pouet.driver
 DRIVER_BINARY = $(DRIVER_BUNDLE)/Contents/MacOS/PouetDriver
 DRIVER_PLIST  = Driver/Pouet.driver/Contents/Info.plist
 
-GUI_SRC       = App/UI/PouetGUI.swift App/Services/Log.swift App/Services/AppService.swift App/Services/AudioService.swift App/Services/AudioMixing.swift App/Services/VideoService.swift App/UI/ContentView.swift
+GUI_SRC       = App/UI/PouetGUI.swift App/Services/Log.swift App/Services/AppService.swift App/Services/AudioService.swift App/Services/AudioMixing.swift App/Services/VideoService.swift App/Services/HotkeyService.swift App/UI/ContentView.swift
 GUI_BUNDLE    = build/Pouet.app
 GUI_BINARY    = $(GUI_BUNDLE)/Contents/MacOS/Pouet
 GUI_BUNDLE_ID = com.pouet.gui
