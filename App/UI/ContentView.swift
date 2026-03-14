@@ -634,52 +634,53 @@ struct ContentView: View {
 
     private func windowRow(_ window: WindowInfo) -> some View {
         let isSelected = app.video.selectedWindowID == window.id
-        return HStack(spacing: 10) {
-            if let icon = window.appIcon {
-                Image(nsImage: icon)
-                    .resizable()
-                    .frame(width: 24, height: 24)
-                    .cornerRadius(4)
-            } else {
-                Image(systemName: "app.fill")
-                    .font(.system(size: 16))
-                    .foregroundColor(Theme.dimText)
-                    .frame(width: 24, height: 24)
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(window.title)
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(Theme.bodyText)
-                    .lineLimit(1)
-                Text(window.appName)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(Theme.dimText)
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-            if isSelected {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(Theme.accent)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(isSelected ? Theme.accent.opacity(0.1) : Color.clear)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(isSelected ? Theme.accent : Theme.border.opacity(0.15), lineWidth: isSelected ? 2 : 1)
-        )
-        .contentShape(Rectangle())
-        .onTapGesture {
+        return Button {
             app.video.selectedWindowID = window.id
+        } label: {
+            HStack(spacing: 10) {
+                if let icon = window.appIcon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 24, height: 24)
+                        .cornerRadius(4)
+                } else {
+                    Image(systemName: "app.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(Theme.dimText)
+                        .frame(width: 24, height: 24)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(window.title)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(Theme.bodyText)
+                        .lineLimit(1)
+                    Text(window.appName)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(Theme.dimText)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(Theme.accent)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isSelected ? Theme.accent.opacity(0.1) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(isSelected ? Theme.accent : Theme.border.opacity(0.15), lineWidth: isSelected ? 2 : 1)
+            )
         }
+        .buttonStyle(.plain)
     }
 
     private func videoSnapshotRow(url: URL) -> some View {
