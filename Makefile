@@ -52,6 +52,12 @@ sign:
 	    MARKETING_VERSION=$(VERSION) \
 	    CURRENT_PROJECT_VERSION=$(VERSION) \
 	    build
+	@# Re-sign Sparkle XPC services with Developer ID (needed for notarization)
+	find $(PRODUCTS)/Pouet.app/Contents/Frameworks/Sparkle.framework -type d -name "*.xpc" | while read xpc; do \
+	    codesign --force --options runtime --sign "$(DEVID)" --timestamp "$$xpc"; \
+	done
+	codesign --force --options runtime --sign "$(DEVID)" --timestamp $(PRODUCTS)/Pouet.app/Contents/Frameworks/Sparkle.framework
+	codesign --force --options runtime --sign "$(DEVID)" --entitlements App/entitlements.plist --timestamp $(PRODUCTS)/Pouet.app
 	@echo "✓ Signed build → $(PRODUCTS)/Pouet.app"
 
 # ---- Uninstaller app (shell script wrapper) ----
