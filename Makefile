@@ -46,18 +46,24 @@ clean:
 sign:
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration $(CONFIG) \
 	    SYMROOT=$(SYMROOT) \
-	    CODE_SIGN_IDENTITY="$(DEVID)" \
+	    CODE_SIGN_IDENTITY=- \
 	    CODE_SIGN_STYLE=Manual \
-	    ENABLE_HARDENED_RUNTIME=YES \
 	    MARKETING_VERSION=$(VERSION) \
 	    CURRENT_PROJECT_VERSION=$(VERSION) \
 	    build
-	@# Re-sign Sparkle XPC services with Developer ID (needed for notarization)
-	find $(PRODUCTS)/Pouet.app/Contents/Frameworks/Sparkle.framework -type d -name "*.xpc" | while read xpc; do \
-	    codesign --force --options runtime --sign "$(DEVID)" --timestamp "$$xpc"; \
+	@# Sign everything inside-out with Developer ID + timestamp (required for notarization)
+	@# 1. Sparkle nested binaries (apps and XPC services)
+	find $(PRODUCTS)/Pouet.app/Contents/Frameworks/Sparkle.framework -type d \( -name "*.app" -o -name "*.xpc" \) | while read nested; do \
+	    codesign --force --options runtime --sign "$(DEVID)" --timestamp "$$nested"; \
 	done
+	@# 2. Sparkle framework
 	codesign --force --options runtime --sign "$(DEVID)" --timestamp $(PRODUCTS)/Pouet.app/Contents/Frameworks/Sparkle.framework
-	codesign --force --options runtime --sign "$(DEVID)" --entitlements App/entitlements.plist --timestamp $(PRODUCTS)/Pouet.app
+	@# 3. Standalone driver
+	codesign --force --options runtime --sign "$(DEVID)" --identifier $(BUNDLE_ID) --timestamp $(PRODUCTS)/Pouet.driver
+	@# 4. Embedded driver
+	codesign --force --options runtime --sign "$(DEVID)" --identifier $(BUNDLE_ID) --timestamp $(PRODUCTS)/Pouet.app/Contents/Resources/Pouet.driver
+	@# 5. App bundle (outermost, last)
+	codesign --force --options runtime --sign "$(DEVID)" --identifier com.pouet.gui --entitlements App/entitlements.plist --timestamp $(PRODUCTS)/Pouet.app
 	@echo "✓ Signed build → $(PRODUCTS)/Pouet.app"
 
 # ---- Uninstaller app (shell script wrapper) ----
