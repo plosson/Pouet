@@ -51,13 +51,8 @@ sign:
 	    MARKETING_VERSION=$(VERSION) \
 	    CURRENT_PROJECT_VERSION=$(VERSION) \
 	    build
-	@# Sign everything inside-out with Developer ID + timestamp (required for notarization)
-	@# 1. Sparkle nested binaries (apps and XPC services)
-	find $(PRODUCTS)/Pouet.app/Contents/Frameworks/Sparkle.framework -type d \( -name "*.app" -o -name "*.xpc" \) | while read nested; do \
-	    codesign --force --options runtime --sign "$(DEVID)" --timestamp "$$nested"; \
-	done
-	@# 2. Sparkle framework
-	codesign --force --options runtime --sign "$(DEVID)" --timestamp $(PRODUCTS)/Pouet.app/Contents/Frameworks/Sparkle.framework
+	@# Deep-sign Sparkle framework and all nested binaries (required for notarization)
+	codesign --deep --force --options runtime --sign "$(DEVID)" --timestamp $(PRODUCTS)/Pouet.app/Contents/Frameworks/Sparkle.framework
 	@# 3. Standalone driver
 	codesign --force --options runtime --sign "$(DEVID)" --identifier $(BUNDLE_ID) --timestamp $(PRODUCTS)/Pouet.driver
 	@# 4. Embedded driver
