@@ -83,6 +83,7 @@ pkg: sign uninstaller
 	pkgbuild \
 	    --root $(PKG_ROOT) \
 	    --install-location / \
+	    --component-plist Installer/component.plist \
 	    --identifier $(BUNDLE_ID) \
 	    --version $(VERSION) \
 	    --scripts Installer/scripts \
