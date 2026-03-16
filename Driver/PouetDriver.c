@@ -154,7 +154,6 @@ typedef struct {
 
     AudioServerPlugInHostRef            host;
     pthread_mutex_t stateLock;
-    _Atomic double  sampleRate;
     mach_timebase_info_data_t tbInfo;
 
     DeviceState     mic;
@@ -228,7 +227,6 @@ static AudioServerPlugInDriverInterface** gDriverInterfacePtrPtr = &gDriverInter
 
 static PouetDriver gDriver = {
     .driverInterface = &gDriverInterfacePtr,
-    .sampleRate      = POUET_SAMPLE_RATE,
     .mic = { .shmFd = -1, .shm = NULL, .ioRunning = 0, .volume = 1.0f, .mute = false },
     .spk = { .shmFd = -1, .shm = NULL, .ioRunning = 0, .volume = 1.0f, .mute = false },
 };
@@ -541,7 +539,7 @@ static OSStatus Pouet_IsPropertySettable(AudioServerPlugInDriverRef inDriver,
 
     if (IsDevice(inObjectID)) {
         if (inAddress->mSelector == kAudioDevicePropertyNominalSampleRate)
-            *outIsSettable = true;
+            *outIsSettable = false;
     }
 
     if (IsStream(inObjectID)) {
@@ -626,7 +624,7 @@ static OSStatus Pouet_GetPropertyDataSize(AudioServerPlugInDriverRef inDriver,
         case kAudioDevicePropertyNominalSampleRate:
             *outDataSize = sizeof(Float64); return kAudioHardwareNoError;
         case kAudioDevicePropertyAvailableNominalSampleRates:
-            *outDataSize = sizeof(AudioValueRange) * 4; return kAudioHardwareNoError;
+            *outDataSize = sizeof(AudioValueRange); return kAudioHardwareNoError;
         case kAudioDevicePropertyPreferredChannelsForStereo:
             *outDataSize = sizeof(UInt32) * 2; return kAudioHardwareNoError;
         case kAudioDevicePropertyPreferredChannelLayout: {
@@ -656,7 +654,7 @@ static OSStatus Pouet_GetPropertyDataSize(AudioServerPlugInDriverRef inDriver,
             *outDataSize = sizeof(AudioStreamBasicDescription); return kAudioHardwareNoError;
         case kAudioStreamPropertyAvailableVirtualFormats:
         case kAudioStreamPropertyAvailablePhysicalFormats:
-            *outDataSize = sizeof(AudioStreamRangedDescription) * 4; return kAudioHardwareNoError;
+            *outDataSize = sizeof(AudioStreamRangedDescription); return kAudioHardwareNoError;
         }
     }
 
@@ -847,16 +845,13 @@ static OSStatus Pouet_GetPropertyData(AudioServerPlugInDriverRef inDriver,
             *(AudioObjectID*)outData = desc->volumeCtrlID;
             *outDataSize = sizeof(AudioObjectID); return kAudioHardwareNoError;
         case kAudioDevicePropertyNominalSampleRate:
-            *(Float64*)outData = gDriver.sampleRate;
+            *(Float64*)outData = POUET_SAMPLE_RATE;
             *outDataSize = sizeof(Float64); return kAudioHardwareNoError;
         case kAudioDevicePropertyAvailableNominalSampleRates: {
-            Float64 rates[] = { 44100.0, 48000.0, 88200.0, 96000.0 };
             AudioValueRange* ranges = (AudioValueRange*)outData;
-            for (int i = 0; i < 4; i++) {
-                ranges[i].mMinimum = rates[i];
-                ranges[i].mMaximum = rates[i];
-            }
-            *outDataSize = 4 * sizeof(AudioValueRange);
+            ranges[0].mMinimum = POUET_SAMPLE_RATE;
+            ranges[0].mMaximum = POUET_SAMPLE_RATE;
+            *outDataSize = sizeof(AudioValueRange);
             return kAudioHardwareNoError;
         }
         case kAudioDevicePropertyPreferredChannelsForStereo: {
@@ -911,21 +906,18 @@ static OSStatus Pouet_GetPropertyData(AudioServerPlugInDriverRef inDriver,
             *outDataSize = sizeof(UInt32); return kAudioHardwareNoError;
         case kAudioStreamPropertyVirtualFormat:
         case kAudioStreamPropertyPhysicalFormat: {
-            AudioStreamBasicDescription asbd = MakeASBD(gDriver.sampleRate);
+            AudioStreamBasicDescription asbd = MakeASBD(POUET_SAMPLE_RATE);
             *(AudioStreamBasicDescription*)outData = asbd;
             *outDataSize = sizeof(AudioStreamBasicDescription);
             return kAudioHardwareNoError;
         }
         case kAudioStreamPropertyAvailableVirtualFormats:
         case kAudioStreamPropertyAvailablePhysicalFormats: {
-            Float64 rates[] = { 44100.0, 48000.0, 88200.0, 96000.0 };
             AudioStreamRangedDescription* descs = (AudioStreamRangedDescription*)outData;
-            for (int i = 0; i < 4; i++) {
-                descs[i].mFormat = MakeASBD(rates[i]);
-                descs[i].mSampleRateRange.mMinimum = rates[i];
-                descs[i].mSampleRateRange.mMaximum = rates[i];
-            }
-            *outDataSize = 4 * sizeof(AudioStreamRangedDescription);
+            descs[0].mFormat = MakeASBD(POUET_SAMPLE_RATE);
+            descs[0].mSampleRateRange.mMinimum = POUET_SAMPLE_RATE;
+            descs[0].mSampleRateRange.mMaximum = POUET_SAMPLE_RATE;
+            *outDataSize = sizeof(AudioStreamRangedDescription);
             return kAudioHardwareNoError;
         }
         }
@@ -1001,10 +993,8 @@ static OSStatus Pouet_SetPropertyData(AudioServerPlugInDriverRef inDriver,
     if (IsDevice(inObjectID)) {
         if (inAddress->mSelector == kAudioDevicePropertyNominalSampleRate) {
             Float64 newRate = *(Float64*)inData;
-            if (newRate < 1.0 || newRate > 384000.0) return kAudioHardwareIllegalOperationError;
-            pthread_mutex_lock(&gDriver.stateLock);
-            atomic_store_explicit(&gDriver.sampleRate, newRate, memory_order_release);
-            pthread_mutex_unlock(&gDriver.stateLock);
+            // Only accept 48kHz — must match the app's fixed sample rate
+            if (newRate != POUET_SAMPLE_RATE) return kAudioHardwareIllegalOperationError;
             return kAudioHardwareNoError;
         }
     }
@@ -1087,7 +1077,7 @@ static OSStatus Pouet_GetZeroTimeStamp(AudioServerPlugInDriverRef inDriver,
     if (!st) return kAudioHardwareBadDeviceError;
 
     uint64_t anchor = atomic_load_explicit(&st->anchorHostTime, memory_order_acquire);
-    double sr = atomic_load_explicit(&gDriver.sampleRate, memory_order_relaxed);
+    double sr = POUET_SAMPLE_RATE;
 
     uint64_t now = mach_absolute_time();
     uint64_t elapsed = now - anchor;
