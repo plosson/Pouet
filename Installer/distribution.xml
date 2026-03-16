@@ -6,6 +6,7 @@
     <conclusion file="Conclusion.html" mime-type="text/html"/>
 
     <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
 
     <choices-outline>
         <line choice="com.pouet.driver.choice"/>

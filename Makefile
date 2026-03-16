@@ -82,6 +82,7 @@ pkg: sign uninstaller
 	@cp -R "build/Uninstall Pouet.app" "$(PKG_ROOT)/Applications/"
 	pkgbuild \
 	    --root $(PKG_ROOT) \
+	    --install-location / \
 	    --identifier $(BUNDLE_ID) \
 	    --version $(VERSION) \
 	    --scripts Installer/scripts \
