@@ -4,15 +4,15 @@
     <title>Pouet</title>
     <language>en</language>
     <item>
-      <title>Version 5.2.2</title>
-      <sparkle:version>5.2.2</sparkle:version>
-      <sparkle:shortVersionString>5.2.2</sparkle:shortVersionString>
-      <pubDate>Mon, 16 Mar 2026 09:43:26 +0000</pubDate>
+      <title>Version 5.2.3</title>
+      <sparkle:version>5.2.3</sparkle:version>
+      <sparkle:shortVersionString>5.2.3</sparkle:shortVersionString>
+      <pubDate>Mon, 16 Mar 2026 09:55:31 +0000</pubDate>
       <enclosure
-        url="https://github.com/plosson/Pouet/releases/download/v5.2.2/Pouet-5.2.2.pkg"
-        length="4986880"
+        url="https://github.com/plosson/Pouet/releases/download/v5.2.3/Pouet-5.2.3.pkg"
+        length="4986260"
         type="application/octet-stream"
-        sparkle:edSignature="UDoQUQJFRoGCbtqxoEy0NTjXQYj+bWYMS8yUlmEvFb2BX+DBf8IiT+1OdOvdFsnqmkFyELXMXGoCpuwrckr/Bg=="
+        sparkle:edSignature="Go+1ywh6w1IGiQaRB26U0zUG/MGbWcVvgMO3F6UHxTC+/c8u+704Xnc/f8Ls3V5LCApLSF/DwHgJYsm/UNHMAA=="
         sparkle:installationType="package"
       />
     </item>
