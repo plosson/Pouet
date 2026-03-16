@@ -28,7 +28,7 @@ DEVID         ?= Developer ID Application: SPRL Losson (427N276E3Q)
 INSTALLER_ID  ?= Developer ID Installer: SPRL Losson (427N276E3Q)
 
 # ============================================================
-.PHONY: all clean sign pkg install uninstall uninstaller test test-c test-swift test-audio test-webrtc
+.PHONY: all clean sign pkg install uninstall uninstaller test test-c test-swift test-integration test-audio test-webrtc
 
 all:
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration $(CONFIG) \
@@ -135,6 +135,15 @@ test-swift: Tests/test_app.swift App/shm_bridge.h App/Services/AudioMixing.swift
 	    Tests/test_app.swift App/Services/AudioMixing.swift
 	@echo "--- Swift app tests ---"
 	./build/test_app
+
+test-integration: Tests/test_integration.c
+	@mkdir -p build
+	clang -O0 -g -Wall -Wextra \
+	    -framework CoreAudio -framework AudioToolbox -framework CoreFoundation \
+	    -o build/test_integration \
+	    Tests/test_integration.c
+	@echo "--- Integration tests (requires installed driver) ---"
+	./build/test_integration
 
 test-audio: Tests/tone_injector.c Tests/test_audio.mjs
 	@mkdir -p build

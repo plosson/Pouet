@@ -539,7 +539,7 @@ static OSStatus Pouet_IsPropertySettable(AudioServerPlugInDriverRef inDriver,
 
     if (IsDevice(inObjectID)) {
         if (inAddress->mSelector == kAudioDevicePropertyNominalSampleRate)
-            *outIsSettable = false;
+            *outIsSettable = true;
     }
 
     if (IsStream(inObjectID)) {
@@ -992,9 +992,8 @@ static OSStatus Pouet_SetPropertyData(AudioServerPlugInDriverRef inDriver,
 
     if (IsDevice(inObjectID)) {
         if (inAddress->mSelector == kAudioDevicePropertyNominalSampleRate) {
-            Float64 newRate = *(Float64*)inData;
-            // Only accept 48kHz — must match the app's fixed sample rate
-            if (newRate != POUET_SAMPLE_RATE) return kAudioHardwareIllegalOperationError;
+            // Accept the call but always stay at 48kHz — apps that try to
+            // change the rate (e.g. Chrome/WebRTC) must not get an error.
             return kAudioHardwareNoError;
         }
     }
