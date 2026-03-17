@@ -24,7 +24,7 @@
 		<key>BundleOverwriteAction</key>
 		<string>upgrade</string>
 		<key>RootRelativeBundlePath</key>
-		<string>Applications/Uninstall Pouet.app</string>
+		<string>Applications/UninstallPouet.app</string>
 	</dict>
 	<dict>
 		<key>BundleHasStrictIdentifier</key>
