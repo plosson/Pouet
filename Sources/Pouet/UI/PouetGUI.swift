@@ -1,7 +1,6 @@
 import SwiftUI
 import AppKit
 import AVFoundation
-import Sparkle
 
 // MARK: - Floating HUD (visible above all apps)
 
@@ -88,7 +87,6 @@ class FloatingHUD {
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var appService: AppService?
-    let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
     private var hudObserver: Any?
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -130,39 +128,11 @@ struct PouetGUI: App {
         .windowResizability(.contentSize)
         .commands {
             CommandGroup(after: .appInfo) {
-                CheckForUpdatesView(updater: delegate.updaterController.updater)
-                Divider()
                 Button("Uninstall Pouet...") {
                     NotificationCenter.default.post(name: .requestUninstall, object: nil)
                 }
             }
         }
-    }
-}
-
-// MARK: - Sparkle "Check for Updates" menu item
-
-struct CheckForUpdatesView: View {
-    @ObservedObject private var checkForUpdatesViewModel: CheckForUpdatesViewModel
-
-    init(updater: SPUUpdater) {
-        self.checkForUpdatesViewModel = CheckForUpdatesViewModel(updater: updater)
-    }
-
-    var body: some View {
-        Button("Check for Updates…", action: checkForUpdatesViewModel.updater.checkForUpdates)
-            .disabled(!checkForUpdatesViewModel.canCheckForUpdates)
-    }
-}
-
-private final class CheckForUpdatesViewModel: ObservableObject {
-    @Published var canCheckForUpdates = false
-    let updater: SPUUpdater
-
-    init(updater: SPUUpdater) {
-        self.updater = updater
-        updater.publisher(for: \.canCheckForUpdates)
-            .assign(to: &$canCheckForUpdates)
     }
 }
 

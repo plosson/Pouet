@@ -5,6 +5,7 @@ import Foundation
 import AVFoundation
 import CoreAudio
 import AudioToolbox
+import SHMBridge
 
 // MARK: - Constants
 

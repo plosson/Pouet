@@ -27,33 +27,32 @@ or FLAC file — it appears as a real mic input to every app on your Mac.
 
 | Component | Language | What it does |
 |-----------|----------|--------------|
-| `PouetDriver.c` | C | Audio Server Plugin — implements the 23-function HAL vtable, reads from shared memory on the real-time audio thread |
-| `App/` | Swift | GUI app — mic proxy, soundboard, audio injection, settings |
-| `SharedMemory.h` | C | Shared ring-buffer layout (included by both) |
+| `Driver/PouetDriver.c` | C | Audio Server Plugin — implements the 23-function HAL vtable, reads from shared memory on the real-time audio thread |
+| `Sources/Pouet/` | Swift | GUI app — mic proxy, soundboard, audio injection, settings (built with SPM) |
+| `Sources/SHMBridge/` | C | Shared memory helpers — exposes `shm_open` wrappers and atomics to Swift via a clang module |
 | `Installer/` | pkg | One-click `.pkg` installer with postinstall script |
 
 ## Requirements
 
-- macOS 12 Monterey or later (Intel or Apple Silicon)
-- Xcode Command Line Tools (`xcode-select --install`)
+- macOS 13 Ventura or later (Intel or Apple Silicon)
+- Xcode Command Line Tools (`xcode-select --install`) — provides `swift build` and `clang`
 - Apple Developer Program membership (for signing + notarization)
 
 ## Build
 
-```bash
-# Clone / open the project folder
-cd PouetDriver
+The Swift app is built with **Swift Package Manager** (`swift build`). The C driver is compiled with `clang`. A Makefile wraps both.
 
-# Build driver bundle + GUI app (unsigned, for local testing)
+```bash
+# Build driver bundle + GUI app (ad-hoc signed, for local testing)
 make
+
+# Build + launch
+make run
 
 # Build, sign, and create installer .pkg
 make DEVID="Developer ID Application: Jane Smith (ABCD1234)" \
      INSTALLER_ID="Developer ID Installer: Jane Smith (ABCD1234)" \
      pkg
-
-# Notarize (requires APPLE_ID, APPLE_APP_PASSWORD, TEAM_ID env vars)
-make notarize
 ```
 
 ## Local install (no signing required for personal use)
@@ -94,7 +93,7 @@ before writing to the ring buffer.
 5. `GetZeroTimeStamp` advances the HAL clock by computing elapsed host ticks
    since the anchor, quantised to buffer periods.
 
-### App side (`App/AudioService.swift`)
+### App side (`Sources/Pouet/Services/AudioService.swift`)
 
 1. Opens the same shared memory region.
 2. Captures audio from the selected real mic via a HAL AudioUnit.
@@ -123,7 +122,7 @@ available samples. No mutex is needed — one producer, one consumer, atomic ops
 - [ ] Download **Developer ID Application** certificate
 - [ ] Download **Developer ID Installer** certificate
 - [ ] Run `make pkg` with correct `DEVID` / `INSTALLER_ID`
-- [ ] Run `make notarize` (set `APPLE_ID`, `APPLE_APP_PASSWORD`, `TEAM_ID`)
+- [ ] Push a version tag — CI notarizes automatically (requires `APPLE_ID`, `APPLE_APP_PASSWORD`, `APPLE_TEAM_ID` secrets)
 - [ ] Distribute `build/Pouet-1.0.0.pkg`
 
 ## Uninstall
