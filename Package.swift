@@ -5,14 +5,8 @@ let package = Package(
     name: "Pouet",
     platforms: [.macOS(.v13)],
     targets: [
-        .target(
-            name: "SHMBridge",
-            path: "Sources/SHMBridge",
-            publicHeadersPath: "include"
-        ),
         .executableTarget(
             name: "Pouet",
-            dependencies: ["SHMBridge"],
             path: "Sources/Pouet",
             linkerSettings: [
                 .linkedFramework("CoreAudio"),
