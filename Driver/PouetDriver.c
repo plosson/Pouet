@@ -86,9 +86,9 @@ static const DeviceDesc kMicDesc = {
     .deviceID        = kMicDeviceID,
     .streamID        = kMicInputStreamID,
     .volumeCtrlID    = kMicVolumeCtrlID,
-    .name            = "Pouet",
-    .uid             = "Pouet-UID-001",
-    .modelUID        = "Pouet-Model-001",
+    .name            = "PouetMicrophone",
+    .uid             = "PouetMicrophone-UID-001",
+    .modelUID        = "PouetMicrophone-Model-001",
     .streamDirection = 1,
     .terminalType    = kAudioStreamTerminalTypeMicrophone,
     .defaultScope    = kAudioObjectPropertyScopeInput,
@@ -792,7 +792,7 @@ static OSStatus Pouet_GetPropertyData(AudioServerPlugInDriverRef inDriver,
             *(CFStringRef*)outData = CFStringCreateWithCString(NULL, desc->modelUID, kCFStringEncodingUTF8);
             *outDataSize = sizeof(CFStringRef); return kAudioHardwareNoError;
         case kAudioDevicePropertyTransportType:
-            *(UInt32*)outData = kAudioDeviceTransportTypeBuiltIn;
+            *(UInt32*)outData = kAudioDeviceTransportTypeVirtual;
             *outDataSize = sizeof(UInt32); return kAudioHardwareNoError;
         case kAudioDevicePropertyRelatedDevices:
             *(AudioObjectID*)outData = desc->deviceID;
