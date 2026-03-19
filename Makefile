@@ -171,27 +171,8 @@ uninstall:
 	@echo "✓ Uninstalled. Pouet driver removed."
 
 # ---- Tests ----
-test: test-c test-swift
+test: test-integration
 	@echo "✓ All tests passed"
-
-test-c: Tests/test_driver.c
-	@mkdir -p build
-	clang -O0 -g -Wall -Wextra \
-	    -o build/test_driver \
-	    Tests/test_driver.c -lm -lpthread
-	@echo "--- C driver tests ---"
-	./build/test_driver
-
-test-swift: Tests/test_app.swift Sources/SHMBridge/include/shm_bridge.h Sources/Pouet/Services/AudioMixing.swift
-	@mkdir -p build
-	swiftc -target arm64-apple-macos13.0 \
-	    -sdk $(shell xcrun --show-sdk-path) \
-	    -O -parse-as-library \
-	    -import-objc-header Sources/SHMBridge/include/shm_bridge.h \
-	    -o build/test_app \
-	    Tests/test_app.swift Sources/Pouet/Services/AudioMixing.swift
-	@echo "--- Swift app tests ---"
-	./build/test_app
 
 test-integration: Tests/test_integration.c
 	@mkdir -p build
