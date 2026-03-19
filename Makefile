@@ -20,7 +20,7 @@ BUNDLE_ID     = com.pouet.driver
 VERSION       := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "0.0.0")
 
 # ---- Paths ----
-DRIVER_SRC    = Driver/PouetDriver.c
+DRIVER_SRC    = Driver/PouetLoopback.c
 DRIVER_BUNDLE = build/Pouet.driver
 DRIVER_BINARY = $(DRIVER_BUNDLE)/Contents/MacOS/PouetDriver
 DRIVER_PLIST  = Driver/Pouet.driver/Contents/Info.plist
@@ -47,7 +47,8 @@ CFLAGS        = -arch arm64 -arch x86_64 \
                 -O2 -fvisibility=hidden -fstack-protector-strong \
                 -Wall -Wextra \
                 -framework CoreAudio \
-                -framework CoreFoundation
+                -framework CoreFoundation \
+                -framework Accelerate
 
 # ============================================================
 .PHONY: all run driver gui uninstaller sign pkg install uninstall clean test test-c test-swift test-integration test-audio test-webrtc
