@@ -51,7 +51,7 @@ private let appCards: [AppCard] = [
     AppCard(
         id: "studio",
         name: "Studio",
-        description: "Virtual mic with audio injection via loopback driver.",
+        description: "Virtual mic proxy with audio injection and video capture.",
         icon: "waveform.circle.fill",
         previewImage: nil,
         previewExt: "png",
@@ -322,12 +322,14 @@ private struct FloatingHeadsView: View {
 
 struct ContentView: View {
     @ObservedObject var app: AppService
+    @ObservedObject var video: VideoService
 
     @State private var toast: String?
     @State private var currentApp: String? = nil
     @State private var selectedTab = 0
     @State private var showUninstallConfirm = false
     @State private var soundFilterText = ""
+    @State private var recPulse = false
     @State private var cardHover: String? = nil
     @State private var soundsDropHighlight = false
     @StateObject private var floatingHeads = FloatingHeadsState()
@@ -648,6 +650,16 @@ struct ContentView: View {
                 }
             }
 
+            devicePill(
+                icon: "speaker.wave.2.fill",
+                label: app.selectedOutputDevice.isEmpty ? "Select output" : app.selectedOutputDevice,
+                active: app.speakerProxyRunning,
+                color: Theme.accent
+            ) {
+                ForEach(app.outputDevices) { dev in
+                    Button(dev.name) { app.selectOutputDevice(dev.name) }
+                }
+            }
         }
     }
 
@@ -780,26 +792,183 @@ struct ContentView: View {
                         }
                     }
 
+                    separator
+
+                    // Snapshot sub-section
+                    Button {
+                        let result = app.saveDashcamSnapshot()
+                        if let url = result.url {
+                            showToast("Saved: \(url.lastPathComponent)")
+                        } else {
+                            showToast("Snapshot failed: \(result.error ?? "unknown error")")
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "camera.fill")
+                                .font(.system(size: 14, weight: .bold))
+                            Text("Save Audio Snapshot (\(Int(app.dashcamBufferSeconds))s) — ⌘\(app.hotkey.keyDisplayName)")
+                                .font(.system(size: 13, weight: .bold))
+                        }
+                        .foregroundColor(app.speakerProxyRunning ? .white : Theme.dimText)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(app.speakerProxyRunning ? Theme.accent : Color.black.opacity(0.05))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(app.speakerProxyRunning ? Theme.border : Color.clear, lineWidth: Theme.borderW)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!app.speakerProxyRunning)
                 }
             }
 
+            // Video card
+            card {
+                VStack(alignment: .leading, spacing: 14) {
+                    sectionTitle("Video", icon: "video.fill")
+
+                    // Window dropdown
+                    HStack(spacing: 10) {
+                        Text("Window")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(Theme.bodyText)
+
+                        Menu {
+                            Button("Refresh Windows") {
+                                Task { await video.refreshWindows() }
+                            }
+                            Divider()
+                            Button("None") {
+                                video.selectedWindowID = nil
+                                Task { await video.stopCapture() }
+                            }
+                            ForEach(video.availableWindows) { window in
+                                Button {
+                                    video.selectedWindowID = window.id
+                                    Task { try? await video.startCapture() }
+                                } label: {
+                                    Text("\(window.appName) — \(window.title)")
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(selectedWindowTitle)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(video.selectedWindowID != nil ? Theme.bodyText : Theme.dimText)
+                                    .lineLimit(1)
+                                Spacer()
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(Theme.dimText)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity)
+                            .background(Theme.bg)
+                            .cornerRadius(10)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(Theme.border.opacity(0.3), lineWidth: 1.5)
+                            )
+                        }
+                    }
+
+                    // Status line + audio toggle
+                    HStack(spacing: 10) {
+                        if video.isCapturing {
+                            Circle()
+                                .fill(Theme.coral)
+                                .frame(width: 8, height: 8)
+                                .opacity(recPulse ? 1.0 : 0.3)
+                                .onAppear {
+                                    withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                                        recPulse = true
+                                    }
+                                }
+                                .onDisappear { recPulse = false }
+                            Text("REC")
+                                .font(.system(size: 11, weight: .heavy))
+                                .foregroundColor(Theme.coral)
+                            Text(selectedWindowTitle)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(Theme.dimText)
+                                .lineLimit(1)
+                        } else {
+                            Text("No window selected")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(Theme.dimText)
+                        }
+
+                        Spacer()
+                    }
+
+                    // Save video snapshot button
+                    Button {
+                        Task {
+                            let result = await app.saveVideoSnapshot()
+                            if let url = result.url {
+                                showToast("Saved: \(url.lastPathComponent)")
+                            } else {
+                                showToast("Save failed: \(result.error ?? "unknown")")
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "camera.fill")
+                                .font(.system(size: 14, weight: .bold))
+                            Text("Save Video Snapshot (\(Int(app.dashcamBufferSeconds))s) — ⌘\(app.hotkey.keyDisplayName)\(app.hotkey.keyDisplayName)")
+                                .font(.system(size: 13, weight: .bold))
+                        }
+                        .foregroundColor(video.isCapturing ? .white : Theme.dimText)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(video.isCapturing ? Theme.purple : Color.black.opacity(0.05))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(video.isCapturing ? Theme.border : Color.clear, lineWidth: Theme.borderW)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!video.isCapturing)
+                }
+            }
         }
+        .onAppear {
+            Task { await video.refreshWindows() }
+        }
+    }
+
+    private var selectedWindowTitle: String {
+        guard let id = video.selectedWindowID,
+              let window = video.availableWindows.first(where: { $0.id == id }) else {
+            return "Select window..."
+        }
+        return "\(window.appName) — \(window.title)"
     }
 
     private func soundCard(name: String) -> some View {
         let url = URL(fileURLWithPath: (app.soundsDir as NSString).appendingPathComponent(name))
         let isInjecting = app.injectingURL == url
+        let isPreviewing = app.previewingURL == url
+        let isActive = isInjecting || isPreviewing
         let ext = (name as NSString).pathExtension.uppercased()
         let displayName = (name as NSString).deletingPathExtension
 
         return HStack(spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(isInjecting ? Theme.accent.opacity(0.15) : Theme.purple.opacity(0.1))
+                    .fill(isActive ? Theme.accent.opacity(0.15) : Theme.purple.opacity(0.1))
                     .frame(width: 40, height: 40)
-                Image(systemName: isInjecting ? "waveform" : "music.note")
+                Image(systemName: isActive ? "waveform" : "music.note")
                     .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(isInjecting ? Theme.accent : Theme.purple)
+                    .foregroundColor(isActive ? Theme.accent : Theme.purple)
             }
 
             VStack(alignment: .leading, spacing: 3) {
@@ -825,7 +994,12 @@ struct ContentView: View {
 
             Spacer()
 
-            playbackButton(active: isInjecting, icon: "mic.fill", size: 32, help: "Inject into virtual mic") {
+            playbackButton(active: isPreviewing, icon: "headphones", size: 32, help: "Play for me only") {
+                if isPreviewing { app.stopPreview() }
+                else { app.preview(url: url) }
+            }
+
+            playbackButton(active: isInjecting, icon: "mic.fill", size: 32, help: "Play for everyone") {
                 if isInjecting { app.stopInjection() }
                 else {
                     app.inject(url: url)
@@ -840,9 +1014,9 @@ struct ContentView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16)
-                .stroke(isInjecting ? Theme.accent : Theme.border, lineWidth: Theme.borderW)
+                .stroke(isActive ? Theme.accent : Theme.border, lineWidth: Theme.borderW)
         )
-        .shadow(color: isInjecting ? Theme.accent.opacity(0.15) : Color.black.opacity(0.06),
+        .shadow(color: isActive ? Theme.accent.opacity(0.15) : Color.black.opacity(0.06),
                 radius: 4, x: 0, y: 2)
     }
 
@@ -939,23 +1113,59 @@ struct ContentView: View {
                 handleSoundsDrop(providers)
             }
 
+            // Recordings card
+            card {
+                VStack(alignment: .leading, spacing: 14) {
+                    sectionTitle("Recordings", icon: "record.circle")
+
+                    if app.allRecordings.isEmpty {
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 8) {
+                                Image(systemName: "record.circle")
+                                    .font(.system(size: 24, weight: .bold))
+                                    .foregroundColor(Theme.dimText.opacity(0.4))
+                                Text("No recordings yet")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundColor(Theme.bodyText)
+                                Text("Use Control Center to save audio or video snapshots")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(Theme.dimText)
+                            }
+                            .padding(.vertical, 16)
+                            Spacer()
+                        }
+                    } else {
+                        VStack(spacing: 8) {
+                            ForEach(app.allRecordings) { item in
+                                recordingRow(item: item)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear {
+            app.refreshAllSnapshots()
         }
     }
 
     private func soundRow(name: String) -> some View {
         let url = URL(fileURLWithPath: (app.soundsDir as NSString).appendingPathComponent(name))
         let isInjecting = app.injectingURL == url
+        let isPreviewing = app.previewingURL == url
+        let isActive = isInjecting || isPreviewing
         let ext = (name as NSString).pathExtension.uppercased()
         let displayName = (name as NSString).deletingPathExtension
 
         return HStack(spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(isInjecting ? Theme.accent.opacity(0.15) : Theme.purple.opacity(0.1))
+                    .fill(isActive ? Theme.accent.opacity(0.15) : Theme.purple.opacity(0.1))
                     .frame(width: 34, height: 34)
-                Image(systemName: isInjecting ? "waveform" : "music.note")
+                Image(systemName: isActive ? "waveform" : "music.note")
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundColor(isInjecting ? Theme.accent : Theme.purple)
+                    .foregroundColor(isActive ? Theme.accent : Theme.purple)
             }
 
             Text(displayName)
@@ -979,7 +1189,12 @@ struct ContentView: View {
 
             Spacer()
 
-            playbackButton(active: isInjecting, icon: "mic.fill", size: 28, help: "Inject into virtual mic") {
+            playbackButton(active: isPreviewing, icon: "headphones", size: 28, help: "Play for me only") {
+                if isPreviewing { app.stopPreview() }
+                else { app.preview(url: url) }
+            }
+
+            playbackButton(active: isInjecting, icon: "mic.fill", size: 28, help: "Play for everyone") {
                 if isInjecting { app.stopInjection() }
                 else { app.inject(url: url) }
             }
@@ -991,10 +1206,65 @@ struct ContentView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14)
-                .stroke(isInjecting ? Theme.accent : Theme.border.opacity(0.3), lineWidth: isInjecting ? Theme.borderW : 1.5)
+                .stroke(isActive ? Theme.accent : Theme.border.opacity(0.3), lineWidth: isActive ? Theme.borderW : 1.5)
         )
     }
 
+    private func recordingRow(item: RecordingItem) -> some View {
+        let url = item.url
+        let isPreviewing = app.previewingURL == url
+        let isInjecting = app.injectingURL == url
+        let isActive = isPreviewing || isInjecting
+        let displayName = (url.lastPathComponent as NSString).deletingPathExtension
+        let isAudio = item.kind == .audio
+
+        return HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isActive ? Theme.accent.opacity(0.15) : Theme.purple.opacity(0.1))
+                    .frame(width: 34, height: 34)
+                Image(systemName: isAudio ? (isActive ? "waveform" : "mic.fill") : "film")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(isActive ? Theme.accent : Theme.purple)
+            }
+
+            Text(displayName)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(Theme.bodyText)
+                .lineLimit(1)
+
+            Spacer()
+
+            circleButton(icon: "folder") {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+
+            if isAudio {
+                playbackButton(active: isPreviewing, icon: "headphones", size: 28, help: "Play for me only") {
+                    if isPreviewing { app.stopPreview() }
+                    else { app.preview(url: url) }
+                }
+
+                playbackButton(active: isInjecting, icon: "mic.fill", size: 28, help: "Play for everyone") {
+                    if isInjecting { app.stopInjection() }
+                    else { app.inject(url: url) }
+                }
+            } else {
+                circleButton(icon: "play.fill") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Theme.cardBg)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(isActive ? Theme.accent : Theme.border.opacity(0.3), lineWidth: isActive ? Theme.borderW : 1.5)
+        )
+    }
 
     // MARK: - Settings Tab
 
@@ -1025,7 +1295,7 @@ struct ContentView: View {
                             NSWorkspace.shared.open(URL(fileURLWithPath: app.baseDir))
                         }
                     }
-                    Text("Sound files stored in /Sounds")
+                    Text("Sounds in /Sounds, audio in /Recordings/Audio, video in /Recordings/Video")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundColor(Theme.dimText)
                 }
@@ -1033,7 +1303,7 @@ struct ContentView: View {
 
             // Two columns
             HStack(alignment: .top, spacing: 14) {
-                // Left: Audio Controls
+                // Left: Audio & Video Controls
                 card {
                     VStack(alignment: .leading, spacing: 14) {
                         sectionTitle("Audio Controls", icon: "speaker.wave.2.fill")
@@ -1058,6 +1328,56 @@ struct ContentView: View {
                                     .frame(width: 40, alignment: .trailing)
                             }
                         }
+
+                        separator
+
+                        // Dashcam Buffer (shared audio + video)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Dashcam Buffer")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(Theme.bodyText)
+                            HStack(spacing: 10) {
+                                Text("\(Int(app.dashcamBufferSeconds))s")
+                                    .font(.system(size: 13, weight: .heavy, design: .monospaced))
+                                    .foregroundColor(Theme.bodyText)
+                                    .frame(width: 30, alignment: .trailing)
+                                Slider(value: $app.dashcamBufferSeconds, in: 1...30, step: 1) { editing in
+                                    if !editing { app.setDashcamBufferSeconds(app.dashcamBufferSeconds) }
+                                }
+                                .tint(Theme.accent)
+                            }
+                            Text("Rolling buffer for audio & video snapshots")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(Theme.dimText)
+                        }
+
+                        separator
+
+                        // Hotkey
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Hotkey")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(Theme.bodyText)
+                            HStack(spacing: 10) {
+                                Text("⌘")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundColor(Theme.dimText)
+                                Picker("", selection: Binding(
+                                    get: { UInt16(app.hotkey.keyCode) },
+                                    set: { app.setHotkeyKey($0) }
+                                )) {
+                                    ForEach(HotkeyService.availableKeys, id: \.keyCode) { key in
+                                        Text(key.name).tag(key.keyCode)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(width: 60)
+                            }
+                            Text("Audio: ⌘\(app.hotkey.keyDisplayName) · Video: ⌘\(app.hotkey.keyDisplayName)\(app.hotkey.keyDisplayName)")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(Theme.dimText)
+                        }
+
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -1067,10 +1387,15 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         sectionTitle("Health Check", icon: "checkmark.shield.fill")
                         healthRow("Driver installed", ok: app.driverInstalled)
-                        healthRow("Pouet visible", ok: app.virtualMicVisible)
+                        healthRow("PouetMicrophone visible", ok: app.virtualMicVisible)
+                        healthRow("PouetSpeaker visible", ok: app.virtualSpeakerVisible)
                         healthRow("Microphone permission", ok: app.hasMicPermission)
+                        healthRow("Screen recording", ok: app.hasScreenRecordingPermission)
                         healthRow("Input devices found", ok: !app.devices.isEmpty)
+                        healthRow("Output devices found", ok: !app.outputDevices.isEmpty)
                         healthRow("Mic proxy active", ok: app.proxyRunning)
+                        healthRow("Speaker proxy active", ok: app.speakerProxyRunning)
+                        healthRow("Video capture active", ok: video.isCapturing)
 
                         separator
 
@@ -1111,6 +1436,7 @@ struct ContentView: View {
             HStack(spacing: 16) {
                 levelMeter(label: "Mic Input", level: app.micPeakLevel, color: Theme.purple)
                 levelMeter(label: "Inject Audio", level: app.injectPeakLevel, color: Theme.accent)
+                levelMeter(label: "Speaker Output", level: app.speakerPeakLevel, color: Theme.purple)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
@@ -1127,7 +1453,7 @@ struct ContentView: View {
                 .foregroundColor(Theme.bodyText)
             Text("\u{b7}")
                 .foregroundColor(Theme.dimText)
-            Text("Virtual microphone with audio injection")
+            Text("Virtual microphone proxy with audio & video capture")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(Theme.dimText)
             Spacer()
@@ -1272,6 +1598,36 @@ struct ContentView: View {
             .cornerRadius(4)
             .overlay(
                 RoundedRectangle(cornerRadius: 4)
+                    .stroke(Theme.border.opacity(0.15), lineWidth: 1)
+            )
+        }
+    }
+
+    private func meterRow(label: String, percent: Int, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Theme.dimText)
+                Spacer()
+                Text("\(percent)%")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundColor(Theme.bodyText)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Theme.border.opacity(0.08))
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(color)
+                        .frame(width: geo.size.width * CGFloat(percent) / 100)
+                        .animation(.easeOut(duration: 0.3), value: percent)
+                }
+            }
+            .frame(height: 6)
+            .cornerRadius(3)
+            .overlay(
+                RoundedRectangle(cornerRadius: 3)
                     .stroke(Theme.border.opacity(0.15), lineWidth: 1)
             )
         }

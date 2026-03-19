@@ -6,11 +6,6 @@ import AVFoundation
 import CoreAudio
 import AudioToolbox
 
-// MARK: - Constants
-
-let SAMPLE_RATE: Double = 48000.0
-let NUM_CHANNELS: UInt32 = 2
-
 // MARK: - Audio Device Info
 
 struct AudioDeviceInfo: Identifiable {
@@ -21,6 +16,19 @@ struct AudioDeviceInfo: Identifiable {
 }
 
 // MARK: - AudioService
+
+private func peakLevel(from buffer: AVAudioPCMBuffer) -> Float {
+    guard let channelData = buffer.floatChannelData else { return 0.0 }
+    let frameLength = Int(buffer.frameLength)
+    var peak: Float = 0.0
+    for ch in 0..<Int(buffer.format.channelCount) {
+        for i in 0..<frameLength {
+            let abs = Swift.abs(channelData[ch][i])
+            if abs > peak { peak = abs }
+        }
+    }
+    return peak
+}
 
 class AudioService {
     private var engine: AVAudioEngine?
@@ -99,17 +107,7 @@ class AudioService {
         // Install tap on input node for peak metering
         let inputFormat = inputNode.outputFormat(forBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
-            guard let self = self else { return }
-            guard let channelData = buffer.floatChannelData else { return }
-            let frameLength = Int(buffer.frameLength)
-            var peak: Float = 0.0
-            for ch in 0..<Int(buffer.format.channelCount) {
-                for i in 0..<frameLength {
-                    let abs = Swift.abs(channelData[ch][i])
-                    if abs > peak { peak = abs }
-                }
-            }
-            self.micPeakLevel = peak
+            self?.micPeakLevel = peakLevel(from: buffer)
         }
 
         // Connect input → mixer → output (AVAudioEngine does this automatically)
@@ -151,12 +149,6 @@ class AudioService {
         eng.attach(player)
         eng.connect(player, to: eng.mainMixerNode, format: file.processingFormat)
 
-        // Install tap on player for inject peak metering
-        let playerFormat = player.outputFormat(forBus: 0)
-        if playerFormat.sampleRate > 0 && playerFormat.channelCount > 0 {
-            // Track this player for peak level updates via a mixer tap instead
-        }
-
         player.scheduleFile(file, at: nil) { [weak self, weak player, weak eng] in
             DispatchQueue.main.async {
                 guard let self = self, let player = player, let eng = eng else { return }
@@ -177,7 +169,7 @@ class AudioService {
     }
 
     func injectAudioAsync(url: URL, completion: ((Error?) -> Void)? = nil) {
-        DispatchQueue.global().async {
+        DispatchQueue.main.async {
             do {
                 try self.injectAudio(url: url)
                 completion?(nil)
@@ -213,16 +205,7 @@ class AudioService {
                 self?.injectPeakLevel = 0.0
                 return
             }
-            guard let channelData = buffer.floatChannelData else { return }
-            let frameLength = Int(buffer.frameLength)
-            var peak: Float = 0.0
-            for ch in 0..<Int(buffer.format.channelCount) {
-                for i in 0..<frameLength {
-                    let abs = Swift.abs(channelData[ch][i])
-                    if abs > peak { peak = abs }
-                }
-            }
-            self.injectPeakLevel = peak
+            self.injectPeakLevel = peakLevel(from: buffer)
         }
         injectTapInstalled = true
     }
@@ -281,7 +264,11 @@ class AudioService {
     }
 
     func listDevices() -> [AudioDeviceInfo] {
-        listDevicesInternal(scope: kAudioDevicePropertyScopeInput, excludeUIDs: ["PouetMicrophone"])
+        listDevicesInternal(scope: kAudioDevicePropertyScopeInput, excludeUIDs: ["PouetMicrophone", "PouetSpeaker"])
+    }
+
+    func listOutputDevices() -> [AudioDeviceInfo] {
+        listDevicesInternal(scope: kAudioDevicePropertyScopeOutput, excludeUIDs: ["PouetMicrophone", "PouetSpeaker"])
     }
 
     private func findDeviceIn(_ devices: [AudioDeviceInfo], matching query: String) -> AudioDeviceInfo? {
@@ -294,20 +281,16 @@ class AudioService {
         findDeviceIn(listDevices(), matching: query)
     }
 
-    func listOutputDevices() -> [AudioDeviceInfo] {
-        listDevicesInternal(scope: kAudioDevicePropertyScopeOutput, excludeUIDs: ["PouetMicrophone"])
+    func findOutputDevice(matching query: String) -> AudioDeviceInfo? {
+        findDeviceIn(listOutputDevices(), matching: query)
     }
 
     func defaultDevice(input: Bool) -> AudioDeviceInfo? {
         guard let deviceID = getSystemDefaultDevice(input: input) else { return nil }
         let uid = getAudioDeviceStringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID) ?? ""
-        if uid.contains("PouetMicrophone") { return nil }
+        if uid.contains("PouetMicrophone") || uid.contains("PouetSpeaker") { return nil }
         let name = getAudioDeviceStringProperty(deviceID, selector: kAudioObjectPropertyName) ?? ""
         return AudioDeviceInfo(id: deviceID, name: name, uid: uid, inputChannels: 0)
-    }
-
-    func findOutputDevice(matching query: String) -> AudioDeviceInfo? {
-        findDeviceIn(listOutputDevices(), matching: query)
     }
 
     // MARK: - System Default Device Switching
@@ -316,7 +299,7 @@ class AudioService {
         getAudioDeviceStringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID)
     }
 
-    func findDeviceByExactUID(_ uid: String) -> AudioDeviceID? {
+    private func allDeviceIDs() -> [AudioDeviceID] {
         var propAddr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -324,40 +307,24 @@ class AudioService {
         )
         var dataSize: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(
-            AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize) == noErr else { return nil }
+            AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize) == noErr else { return [] }
         let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
         var ids = [AudioDeviceID](repeating: 0, count: count)
         guard AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize, &ids) == noErr else { return nil }
-        for devID in ids {
-            if let devUID = getAudioDeviceStringProperty(devID, selector: kAudioDevicePropertyDeviceUID),
-               devUID == uid {
-                return devID
-            }
+            AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize, &ids) == noErr else { return [] }
+        return ids
+    }
+
+    func findDeviceByExactUID(_ uid: String) -> AudioDeviceID? {
+        allDeviceIDs().first { devID in
+            getAudioDeviceStringProperty(devID, selector: kAudioDevicePropertyDeviceUID) == uid
         }
-        return nil
     }
 
     func findDeviceByUID(_ uidFragment: String) -> AudioDeviceID? {
-        var propAddr = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDevices,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var dataSize: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(
-            AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize) == noErr else { return nil }
-        let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
-        var ids = [AudioDeviceID](repeating: 0, count: count)
-        guard AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &dataSize, &ids) == noErr else { return nil }
-        for devID in ids {
-            if let uid = getAudioDeviceStringProperty(devID, selector: kAudioDevicePropertyDeviceUID),
-               uid.contains(uidFragment) {
-                return devID
-            }
+        allDeviceIDs().first { devID in
+            getAudioDeviceStringProperty(devID, selector: kAudioDevicePropertyDeviceUID)?.contains(uidFragment) == true
         }
-        return nil
     }
 
     func getSystemDefaultDevice(input: Bool) -> AudioDeviceID? {
@@ -378,7 +345,7 @@ class AudioService {
     func getNonVirtualDefaultDevice(input: Bool) -> AudioDeviceID? {
         guard let deviceID = getSystemDefaultDevice(input: input) else { return nil }
         let uid = getAudioDeviceStringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID) ?? ""
-        if uid.contains("PouetMicrophone") { return nil }
+        if uid.contains("PouetMicrophone") || uid.contains("PouetSpeaker") { return nil }
         return deviceID
     }
 
@@ -398,69 +365,182 @@ class AudioService {
         return status == noErr
     }
 
-    /// Check if PouetMicrophone appears as an audio device in the system
     var virtualMicVisible: Bool {
         findDeviceByUID("PouetMicrophone") != nil
     }
 
-    // MARK: - Audio Decoding
+    var virtualSpeakerVisible: Bool {
+        findDeviceByUID("PouetSpeaker") != nil
+    }
 
-    static func decodeAudioFile(url: URL) throws -> [Float] {
-        let file = try AVAudioFile(forReading: url)
-        let srcFormat = file.processingFormat
-        let targetFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: SAMPLE_RATE,
-            channels: NUM_CHANNELS,
-            interleaved: true
-        )!
+    // MARK: - Speaker Proxy (AVAudioEngine: PouetSpeaker input → real speakers + rolling buffer)
 
-        guard let converter = AVAudioConverter(from: srcFormat, to: targetFormat) else {
-            throw NSError(domain: "AudioConvert", code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: "Cannot create converter"])
+    private var speakerEngine: AVAudioEngine?
+    private(set) var speakerProxyDeviceName: String?
+    private(set) var isSpeakerProxyRunning: Bool { get { speakerEngine?.isRunning ?? false } set {} }
+    private(set) var speakerPeakLevel: Float = 0.0
+
+    /// Rolling buffer for dashcam snapshots
+    private var dashcamBuffer: [Float] = []
+    private var dashcamBufferCapacity: Int = 0
+    private var dashcamWriteIndex: Int = 0
+    private var dashcamSampleRate: Double = 48000
+    private var dashcamChannelCount: UInt32 = 2
+
+    func startSpeakerProxy(deviceID: AudioDeviceID, deviceName: String, bufferDuration: Double) throws {
+        stopSpeakerProxy()
+
+        guard let speakerLoopbackID = findDeviceByUID("PouetSpeaker") else {
+            throw NSError(domain: "AudioService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "PouetSpeaker loopback device not found"])
         }
 
-        let frameCount = AVAudioFrameCount(file.length)
-        guard let srcBuffer = AVAudioPCMBuffer(pcmFormat: srcFormat, frameCapacity: frameCount) else {
-            throw NSError(domain: "AudioConvert", code: -2)
-        }
-        try file.read(into: srcBuffer)
+        let eng = AVAudioEngine()
 
-        let ratio = SAMPLE_RATE / srcFormat.sampleRate
-        let dstFrameCount = AVAudioFrameCount(Double(frameCount) * ratio) + 512
-        guard let dstBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: dstFrameCount) else {
-            throw NSError(domain: "AudioConvert", code: -3)
-        }
-
-        var error: NSError?
-        var srcConsumed = false
-        _ = converter.convert(to: dstBuffer, error: &error) { _, outStatus in
-            if srcConsumed {
-                outStatus.pointee = .noDataNow
-                return nil
+        // Set input device to PouetSpeaker (reads looped-back system audio)
+        let inputNode = eng.inputNode
+        if let inputAU = inputNode.audioUnit {
+            var devID = speakerLoopbackID
+            let status = AudioUnitSetProperty(
+                inputAU,
+                kAudioOutputUnitProperty_CurrentDevice,
+                kAudioUnitScope_Global, 0,
+                &devID,
+                UInt32(MemoryLayout<AudioDeviceID>.size)
+            )
+            if status != noErr {
+                throw NSError(domain: "AudioService", code: Int(status),
+                              userInfo: [NSLocalizedDescriptionKey: "Failed to set speaker proxy input device: \(status)"])
             }
-            srcConsumed = true
-            outStatus.pointee = .haveData
-            return srcBuffer
         }
-        if let e = error { throw e }
 
-        let frameLength = Int(dstBuffer.frameLength)
-        let numSamples  = frameLength * Int(NUM_CHANNELS)
-        var result = [Float](repeating: 0, count: numSamples)
+        // Set output device to real speakers (so user hears audio)
+        let outputNode = eng.outputNode
+        if let outputAU = outputNode.audioUnit {
+            var devID = deviceID
+            let status = AudioUnitSetProperty(
+                outputAU,
+                kAudioOutputUnitProperty_CurrentDevice,
+                kAudioUnitScope_Global, 0,
+                &devID,
+                UInt32(MemoryLayout<AudioDeviceID>.size)
+            )
+            if status != noErr {
+                throw NSError(domain: "AudioService", code: Int(status),
+                              userInfo: [NSLocalizedDescriptionKey: "Failed to set speaker proxy output device: \(status)"])
+            }
+        }
 
-        if let ptr = dstBuffer.floatChannelData {
-            if targetFormat.isInterleaved {
-                memcpy(&result, ptr[0], numSamples * MemoryLayout<Float>.size)
-            } else {
-                let L = ptr[0]; let R = ptr[1]
-                for i in 0..<frameLength {
-                    result[i * 2]     = L[i]
-                    result[i * 2 + 1] = R[i]
+        // Set up rolling buffer
+        let inputFormat = inputNode.outputFormat(forBus: 0)
+        dashcamSampleRate = inputFormat.sampleRate > 0 ? inputFormat.sampleRate : 48000
+        dashcamChannelCount = inputFormat.channelCount > 0 ? inputFormat.channelCount : 2
+        dashcamBufferCapacity = Int(dashcamSampleRate * Double(dashcamChannelCount) * bufferDuration)
+        dashcamBuffer = [Float](repeating: 0, count: dashcamBufferCapacity)
+        dashcamWriteIndex = 0
+
+        // Tap on input to capture audio for dashcam + peak metering
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
+            guard let self = self else { return }
+            self.speakerPeakLevel = peakLevel(from: buffer)
+
+            // Write to rolling buffer
+            guard let channelData = buffer.floatChannelData else { return }
+            let frameLength = Int(buffer.frameLength)
+            let channels = Int(buffer.format.channelCount)
+            for i in 0..<frameLength {
+                for ch in 0..<channels {
+                    self.dashcamBuffer[self.dashcamWriteIndex % self.dashcamBufferCapacity] = channelData[ch][i]
+                    self.dashcamWriteIndex += 1
                 }
             }
         }
-        return result
+
+        eng.prepare()
+        try eng.start()
+
+        speakerEngine = eng
+        speakerProxyDeviceName = deviceName
+        Log.info("Speaker proxy started: PouetSpeaker → \(deviceName)")
+    }
+
+    func stopSpeakerProxy() {
+        if let eng = speakerEngine {
+            eng.inputNode.removeTap(onBus: 0)
+            eng.stop()
+            speakerEngine = nil
+        }
+        speakerProxyDeviceName = nil
+        speakerPeakLevel = 0.0
+        dashcamBuffer = []
+        dashcamWriteIndex = 0
+    }
+
+    func saveDashcamSnapshot(to url: URL) throws {
+        guard speakerEngine?.isRunning == true else {
+            throw NSError(domain: "AudioService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Speaker proxy not running"])
+        }
+
+        let totalWritten = dashcamWriteIndex
+        let sampleCount = min(totalWritten, dashcamBufferCapacity)
+        guard sampleCount > 0 else {
+            throw NSError(domain: "AudioService", code: -2,
+                          userInfo: [NSLocalizedDescriptionKey: "No audio captured yet"])
+        }
+
+        let channels = dashcamChannelCount
+        let frameCount = sampleCount / Int(channels)
+
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: dashcamSampleRate,
+            channels: channels,
+            interleaved: false
+        )!
+        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount)) else {
+            throw NSError(domain: "AudioService", code: -3,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to create audio buffer"])
+        }
+        pcmBuffer.frameLength = AVAudioFrameCount(frameCount)
+
+        // Copy from rolling buffer (interleaved) to PCM buffer (non-interleaved)
+        let startIndex = (totalWritten >= dashcamBufferCapacity)
+            ? (totalWritten % dashcamBufferCapacity)
+            : 0
+
+        guard let floatChannelData = pcmBuffer.floatChannelData else {
+            throw NSError(domain: "AudioService", code: -4,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to access buffer channel data"])
+        }
+
+        for frame in 0..<frameCount {
+            for ch in 0..<Int(channels) {
+                let srcIdx = (startIndex + frame * Int(channels) + ch) % dashcamBufferCapacity
+                floatChannelData[ch][frame] = dashcamBuffer[srcIdx]
+            }
+        }
+
+        // Write as M4A (AAC)
+        let outputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: dashcamSampleRate,
+            channels: channels,
+            interleaved: false
+        )!
+        let file = try AVAudioFile(
+            forWriting: url,
+            settings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: dashcamSampleRate,
+                AVNumberOfChannelsKey: channels,
+                AVEncoderBitRateKey: 128000
+            ],
+            commonFormat: outputFormat.commonFormat,
+            interleaved: false
+        )
+        try file.write(from: pcmBuffer)
+        Log.info("Dashcam snapshot saved: \(url.lastPathComponent) (\(frameCount) frames)")
     }
 }
 

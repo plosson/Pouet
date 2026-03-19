@@ -186,7 +186,7 @@ struct ObjectInfo {
 #else
 #define                             kBox_UID                            kDriver_Name "_UID"
 #define                             kDevice_UID                         kDriver_Name "_UID"
-#define                             kDevice2_UID                        kDriver_Name "_2_UID"
+#define                             kDevice2_UID                        "PouetSpeaker_UID"
 #define                             kDevice_ModelUID                    kDriver_Name "_ModelUID"
 
 
@@ -195,7 +195,7 @@ struct ObjectInfo {
 #endif
 
 #ifndef kDevice2_Name
-#define                             kDevice2_Name                       kDriver_Name " Mirror"
+#define                             kDevice2_Name                       "PouetSpeaker"
 #endif
 
 #endif
@@ -205,7 +205,7 @@ struct ObjectInfo {
 #endif
 
 #ifndef kDevice2_IsHidden
-#define                             kDevice2_IsHidden                   true
+#define                             kDevice2_IsHidden                   false
 #endif
 
 
@@ -219,11 +219,11 @@ struct ObjectInfo {
 #endif
 
 #ifndef kDevice2_HasInput
-#define                             kDevice2_HasInput                   false
+#define                             kDevice2_HasInput                   true
 #endif
 
 #ifndef kDevice2_HasOutput
-#define                             kDevice2_HasOutput                  false
+#define                             kDevice2_HasOutput                  true
 #endif
 
 
@@ -336,6 +336,7 @@ static const UInt32                 kDevice_SampleRatesSize             = sizeof
 #define                             kBytes_Per_Frame                    (kNumber_Of_Channels * kBytes_Per_Channel)
 #define                             kRing_Buffer_Frame_Size             ((65536 + kLatency_Frame_Size))
 static Float32*                     gRingBuffer = NULL;
+static Float32*                     gRingBuffer2 = NULL;
 
 
 //==================================================================================================
@@ -433,15 +434,13 @@ static AudioServerPlugInDriverInterface*    gAudioServerPlugInDriverInterfacePtr
 static AudioServerPlugInDriverRef            gAudioServerPlugInDriverRef                = &gAudioServerPlugInDriverInterfacePtr;
 
 
+#if kHas_Driver_Name_Format
 #define RETURN_FORMATTED_STRING(_string_fmt)                          \
-if(kHas_Driver_Name_Format)                                           \
-{                                                                     \
-	return CFStringCreateWithFormat(NULL, NULL, CFSTR(_string_fmt), kNumber_Of_Channels); \
-}                                                                     \
-else                                                                  \
-{                                                                     \
-	return CFStringCreateWithCString(NULL, _string_fmt, kCFStringEncodingUTF8); \
-}
+	return CFStringCreateWithFormat(NULL, NULL, CFSTR(_string_fmt), kNumber_Of_Channels);
+#else
+#define RETURN_FORMATTED_STRING(_string_fmt)                          \
+	return CFStringCreateWithCString(NULL, _string_fmt, kCFStringEncodingUTF8);
+#endif
 
 static CFStringRef get_box_uid(void)          { RETURN_FORMATTED_STRING(kBox_UID) }
 static CFStringRef get_device_uid(void)       { RETURN_FORMATTED_STRING(kDevice_UID) }
@@ -612,6 +611,7 @@ static bool is_valid_sample_rate(Float64 sample_rate)
 
 #pragma mark Factory
 
+__attribute__((visibility("default")))
 void*	PouetLoopback_Create(CFAllocatorRef inAllocator, CFUUIDRef inRequestedTypeUUID)
 {
 	//	This is the CFPlugIn factory function. Its job is to create the implementation for the given
@@ -1508,19 +1508,8 @@ static OSStatus	PouetLoopback_GetPlugInPropertyData(AudioServerPlugInDriverRef i
 
 			if(CFStringCompare(*((CFStringRef*)inQualifierData), boxUID, 0) == kCFCompareEqualTo)
 			{
-				CFStringRef formattedString = CFStringCreateWithFormat(NULL, NULL, CFSTR(kBox_UID), kNumber_Of_Channels);
-				if(CFStringCompare(*((CFStringRef*)inQualifierData), formattedString, 0) == kCFCompareEqualTo)
-				{
-					*((AudioObjectID*)outData) = kObjectID_Box;
-				}
-				else
-				{
-					*((AudioObjectID*)outData) = kAudioObjectUnknown;
-				}
-				*outDataSize = sizeof(AudioObjectID);
-				CFRelease(formattedString);
-
 				*((AudioObjectID*)outData) = kObjectID_Box;
+				*outDataSize = sizeof(AudioObjectID);
 			}
 			else
 			{
@@ -4329,15 +4318,24 @@ static OSStatus	PouetLoopback_StartIO(AudioServerPlugInDriverRef inDriver, Audio
     
     if (inDeviceObjectID == kObjectID_Device) { gDevice_IOIsRunning += 1; }
     if (inDeviceObjectID == kObjectID_Device2) { gDevice2_IOIsRunning += 1; }
-    
-    // allocate ring buffer
-    if ((gDevice_IOIsRunning || gDevice2_IOIsRunning) && gRingBuffer == NULL)
+
+    // Reset clock on first IO start
+    if ((gDevice_IOIsRunning + gDevice2_IOIsRunning) == 1)
     {
         gDevice_NumberTimeStamps = 0;
         gDevice_AnchorSampleTime = 0;
         gDevice_AnchorHostTime = mach_absolute_time();
         gDevice_PreviousTicks = 0;
+    }
+
+    // Allocate per-device ring buffers
+    if (gDevice_IOIsRunning && gRingBuffer == NULL)
+    {
         gRingBuffer = calloc(kRing_Buffer_Frame_Size * kNumber_Of_Channels, sizeof(Float32));
+    }
+    if (gDevice2_IOIsRunning && gRingBuffer2 == NULL)
+    {
+        gRingBuffer2 = calloc(kRing_Buffer_Frame_Size * kNumber_Of_Channels, sizeof(Float32));
     }
     
     
@@ -4370,12 +4368,17 @@ static OSStatus	PouetLoopback_StopIO(AudioServerPlugInDriverRef inDriver, AudioO
     
     if (inDeviceObjectID == kObjectID_Device) { gDevice_IOIsRunning -= 1; }
     if (inDeviceObjectID == kObjectID_Device2) { gDevice2_IOIsRunning -= 1; }
-    
-    // free the ring buffer
-    if (!gDevice_IOIsRunning && !gDevice2_IOIsRunning && gRingBuffer != NULL)
+
+    // Free per-device ring buffers
+    if (!gDevice_IOIsRunning && gRingBuffer != NULL)
     {
         free(gRingBuffer);
         gRingBuffer = NULL;
+    }
+    if (!gDevice2_IOIsRunning && gRingBuffer2 != NULL)
+    {
+        free(gRingBuffer2);
+        gRingBuffer2 = NULL;
     }
 	
 	//	unlock the state lock
@@ -4401,7 +4404,6 @@ static OSStatus	PouetLoopback_GetZeroTimeStamp(AudioServerPlugInDriverRef inDriv
 	//	declare the local variables
 	OSStatus theAnswer = 0;
 	UInt64 theCurrentHostTime;
-	Float64 theHostTicksPerRingBuffer;
 	Float64 theAdjustedTicksPerRingBuffer;
 	Float64 theNextTickOffset;
 	UInt64 theNextHostTime;
@@ -4417,7 +4419,6 @@ static OSStatus	PouetLoopback_GetZeroTimeStamp(AudioServerPlugInDriverRef inDriv
 	theCurrentHostTime = mach_absolute_time();
 	
 	//	calculate the next host time
-	theHostTicksPerRingBuffer = gDevice_HostTicksPerFrame * ((Float64)kDevice_RingBufferSize);
     if (gClockSource_Value > 0) {
         theAdjustedTicksPerRingBuffer = gDevice_AdjustedTicksPerFrame * ((Float64)kDevice_RingBufferSize);
     }
@@ -4542,32 +4543,41 @@ static OSStatus	PouetLoopback_DoIOOperation(AudioServerPlugInDriverRef inDriver,
         secondPartFrameSize = inIOBufferFrameSize - firstPartFrameSize;
     }
     
-    // Keep track of last outputSampleTime and the cleared buffer status.
+    // Per-device stale-data tracking
     static Float64 lastOutputSampleTime = 0;
     static Boolean isBufferClear = true;
-    
+    static Float64 lastOutputSampleTime2 = 0;
+    static Boolean isBufferClear2 = true;
+
+    // Select the ring buffer and stale-data state for this device
+    Float32* ringBuf = (inDeviceObjectID == kObjectID_Device2) ? gRingBuffer2 : gRingBuffer;
+    Float64* lastOutTime = (inDeviceObjectID == kObjectID_Device2) ? &lastOutputSampleTime2 : &lastOutputSampleTime;
+    Boolean* bufClear = (inDeviceObjectID == kObjectID_Device2) ? &isBufferClear2 : &isBufferClear;
+
+    if (ringBuf == NULL) goto Done;
+
     // From PouetLoopback to Application
     if(inOperationID == kAudioServerPlugInIOOperationReadInput)
     {
-        // If mute is one let's just fill the buffer with zeros or if there's no apps outputting audio
-        if (gMute_Master_Value || lastOutputSampleTime - inIOBufferFrameSize < inIOCycleInfo->mInputTime.mSampleTime)
+        // If mute is on let's just fill the buffer with zeros or if there's no apps outputting audio
+        if (gMute_Master_Value || *lastOutTime - inIOBufferFrameSize < inIOCycleInfo->mInputTime.mSampleTime)
         {
             // Clear the ioMainBuffer
             vDSP_vclr(ioMainBuffer, 1, inIOBufferFrameSize * kNumber_Of_Channels);
-            
+
             // Clear the ring buffer.
-            if (!isBufferClear)
+            if (!*bufClear)
             {
-                vDSP_vclr(gRingBuffer, 1, kRing_Buffer_Frame_Size * kNumber_Of_Channels);
-                isBufferClear = true;
+                vDSP_vclr(ringBuf, 1, kRing_Buffer_Frame_Size * kNumber_Of_Channels);
+                *bufClear = true;
             }
         }
         else
         {
             // Copy the buffers.
-            memcpy(ioMainBuffer, gRingBuffer + ringBufferFrameLocationStart * kNumber_Of_Channels, firstPartFrameSize * kNumber_Of_Channels * sizeof(Float32));
-            memcpy((Float32*)ioMainBuffer + firstPartFrameSize * kNumber_Of_Channels, gRingBuffer, secondPartFrameSize * kNumber_Of_Channels * sizeof(Float32));
-            
+            memcpy(ioMainBuffer, ringBuf + ringBufferFrameLocationStart * kNumber_Of_Channels, firstPartFrameSize * kNumber_Of_Channels * sizeof(Float32));
+            memcpy((Float32*)ioMainBuffer + firstPartFrameSize * kNumber_Of_Channels, ringBuf, secondPartFrameSize * kNumber_Of_Channels * sizeof(Float32));
+
             // Finally we'll apply the output volume to the buffer.
 	    if(kEnableVolumeControl)
 	    {
@@ -4576,26 +4586,26 @@ static OSStatus	PouetLoopback_DoIOOperation(AudioServerPlugInDriverRef inDriver,
 
         }
     }
-    
+
     // From Application to PouetLoopback
     if(inOperationID == kAudioServerPlugInIOOperationWriteMix)
     {
-        
+
         // Overload error.
         if (inIOCycleInfo->mCurrentTime.mSampleTime > inIOCycleInfo->mOutputTime.mSampleTime + inIOBufferFrameSize + kLatency_Frame_Size)
         {
             DebugMsg("PouetLoopback overload error. kAudioServerPlugInIOOperationWriteMix was unable to complete operation before the deadline. Try increasing the buffer frame size.");
             return kAudioHardwareUnspecifiedError;
         }
-        
-        
+
+
         // Copy the buffers.
-        memcpy(gRingBuffer + ringBufferFrameLocationStart * kNumber_Of_Channels, ioMainBuffer, firstPartFrameSize * kNumber_Of_Channels * sizeof(Float32));
-        memcpy(gRingBuffer, (Float32*)ioMainBuffer + firstPartFrameSize * kNumber_Of_Channels, secondPartFrameSize * kNumber_Of_Channels * sizeof(Float32));
-        
+        memcpy(ringBuf + ringBufferFrameLocationStart * kNumber_Of_Channels, ioMainBuffer, firstPartFrameSize * kNumber_Of_Channels * sizeof(Float32));
+        memcpy(ringBuf, (Float32*)ioMainBuffer + firstPartFrameSize * kNumber_Of_Channels, secondPartFrameSize * kNumber_Of_Channels * sizeof(Float32));
+
         // Save the last output time.
-        lastOutputSampleTime = inIOCycleInfo->mOutputTime.mSampleTime + inIOBufferFrameSize;
-        isBufferClear = false;
+        *lastOutTime = inIOCycleInfo->mOutputTime.mSampleTime + inIOBufferFrameSize;
+        *bufClear = false;
     }
 
 Done:

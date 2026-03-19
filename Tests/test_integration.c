@@ -1,4 +1,5 @@
 // test_integration.c — Integration tests against the installed Pouet loopback driver.
+// Tests device properties for BOTH PouetMicrophone and PouetSpeaker.
 // Requires the driver to be loaded in coreaudiod. Skips gracefully if not found.
 // Build: clang -framework CoreAudio -framework CoreFoundation -o test_integration test_integration.c
 // Run:   ./test_integration
@@ -23,9 +24,9 @@ static int tests_passed = 0;
 } while(0)
 
 // ---------------------------------------------------------------------------
-// Find the PouetMicrophone loopback device
+// Find a Pouet device by name substring
 // ---------------------------------------------------------------------------
-static AudioDeviceID findPouetDevice(void) {
+static AudioDeviceID findDeviceByName(const char* needle) {
     AudioObjectPropertyAddress addr = {
         kAudioHardwarePropertyDevices,
         kAudioObjectPropertyScopeGlobal,
@@ -54,7 +55,7 @@ static AudioDeviceID findPouetDevice(void) {
             char buf[256];
             CFStringGetCString(name, buf, sizeof(buf), kCFStringEncodingUTF8);
             CFRelease(name);
-            if (strstr(buf, "PouetMicrophone") != NULL) {
+            if (strstr(buf, needle) != NULL) {
                 found = devices[i];
                 break;
             }
@@ -65,7 +66,7 @@ static AudioDeviceID findPouetDevice(void) {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: get nominal sample rate
+// Helpers
 // ---------------------------------------------------------------------------
 static OSStatus getRate(AudioDeviceID dev, Float64 *rate) {
     AudioObjectPropertyAddress addr = {
@@ -77,8 +78,17 @@ static OSStatus getRate(AudioDeviceID dev, Float64 *rate) {
     return AudioObjectGetPropertyData(dev, &addr, 0, NULL, &size, rate);
 }
 
+static UInt32 getStreamCount(AudioDeviceID dev, AudioObjectPropertyScope scope) {
+    AudioObjectPropertyAddress addr = {
+        kAudioDevicePropertyStreams, scope, kAudioObjectPropertyElementMain
+    };
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(dev, &addr, 0, NULL, &size) != noErr) return 0;
+    return size / sizeof(AudioStreamID);
+}
+
 // ---------------------------------------------------------------------------
-// Tests
+// Tests (parameterized by device)
 // ---------------------------------------------------------------------------
 
 static int test_default_rate_48k(AudioDeviceID dev) {
@@ -90,28 +100,14 @@ static int test_default_rate_48k(AudioDeviceID dev) {
 }
 
 static int test_has_input_stream(AudioDeviceID dev) {
-    AudioObjectPropertyAddress addr = {
-        kAudioDevicePropertyStreams,
-        kAudioObjectPropertyScopeInput,
-        kAudioObjectPropertyElementMain
-    };
-    UInt32 size = 0;
-    OSStatus err = AudioObjectGetPropertyDataSize(dev, &addr, 0, NULL, &size);
-    ASSERT(err == 0, "GetPropertyDataSize(input streams) failed: %d", (int)err);
-    ASSERT(size >= sizeof(AudioStreamID), "no input streams found");
+    UInt32 count = getStreamCount(dev, kAudioObjectPropertyScopeInput);
+    ASSERT(count >= 1, "no input streams found (count=%u)", (unsigned)count);
     return 1;
 }
 
 static int test_has_output_stream(AudioDeviceID dev) {
-    AudioObjectPropertyAddress addr = {
-        kAudioDevicePropertyStreams,
-        kAudioObjectPropertyScopeOutput,
-        kAudioObjectPropertyElementMain
-    };
-    UInt32 size = 0;
-    OSStatus err = AudioObjectGetPropertyDataSize(dev, &addr, 0, NULL, &size);
-    ASSERT(err == 0, "GetPropertyDataSize(output streams) failed: %d", (int)err);
-    ASSERT(size >= sizeof(AudioStreamID), "no output streams found");
+    UInt32 count = getStreamCount(dev, kAudioObjectPropertyScopeOutput);
+    ASSERT(count >= 1, "no output streams found (count=%u)", (unsigned)count);
     return 1;
 }
 
@@ -136,10 +132,10 @@ static int test_input_stream_format(AudioDeviceID dev) {
     err = AudioObjectGetPropertyData(stream, &fmtAddr, 0, NULL, &size, &asbd);
     ASSERT(err == 0, "GetPropertyData(VirtualFormat) failed: %d", (int)err);
     ASSERT(asbd.mSampleRate == EXPECTED_SAMPLE_RATE,
-           "stream sample rate: expected %.0f, got %.0f", EXPECTED_SAMPLE_RATE, asbd.mSampleRate);
+           "sample rate: expected %.0f, got %.0f", EXPECTED_SAMPLE_RATE, asbd.mSampleRate);
     ASSERT(asbd.mChannelsPerFrame == EXPECTED_CHANNELS,
-           "stream channels: expected %d, got %u", EXPECTED_CHANNELS, (unsigned)asbd.mChannelsPerFrame);
-    ASSERT(asbd.mFormatID == kAudioFormatLinearPCM, "stream format is not LPCM");
+           "channels: expected %d, got %u", EXPECTED_CHANNELS, (unsigned)asbd.mChannelsPerFrame);
+    ASSERT(asbd.mFormatID == kAudioFormatLinearPCM, "format is not LPCM");
     ASSERT(asbd.mBitsPerChannel == 32, "expected 32-bit, got %u", (unsigned)asbd.mBitsPerChannel);
     return 1;
 }
@@ -164,29 +160,57 @@ static int test_supports_multiple_rates(AudioDeviceID dev) {
 // Runner
 // ---------------------------------------------------------------------------
 
-#define RUN(fn, dev) do { \
+#define RUN(label, fn, dev) do { \
     tests_run++; \
+    printf("  %-50s ", label); \
+    fflush(stdout); \
     if (fn(dev)) { \
-        printf("  %-45s OK\n", #fn); \
+        printf("OK\n"); \
         tests_passed++; \
     } else { \
-        printf("  %-45s FAIL\n", #fn); \
+        printf("FAIL\n"); \
     } \
 } while(0)
 
+static void runDeviceTests(const char* name, AudioDeviceID dev) {
+    char label[80];
+    #define DEVTEST(fn) do { \
+        snprintf(label, sizeof(label), "%s: %s", name, #fn); \
+        RUN(label, fn, dev); \
+    } while(0)
+
+    DEVTEST(test_default_rate_48k);
+    DEVTEST(test_has_input_stream);
+    DEVTEST(test_has_output_stream);
+    DEVTEST(test_input_stream_format);
+    DEVTEST(test_supports_multiple_rates);
+    #undef DEVTEST
+}
+
 int main(void) {
-    AudioDeviceID dev = findPouetDevice();
-    if (dev == kAudioObjectUnknown) {
-        printf("SKIP: PouetMicrophone driver not installed — install with 'make install' first\n");
+    AudioDeviceID mic = findDeviceByName("PouetMicrophone");
+    AudioDeviceID spk = findDeviceByName("PouetSpeaker");
+
+    if (mic == kAudioObjectUnknown && spk == kAudioObjectUnknown) {
+        printf("SKIP: Pouet driver not installed — install with 'make install' first\n");
         return 0;
     }
-    printf("=== Integration Tests (PouetMicrophone device ID: %u) ===\n", (unsigned)dev);
 
-    RUN(test_default_rate_48k, dev);
-    RUN(test_has_input_stream, dev);
-    RUN(test_has_output_stream, dev);
-    RUN(test_input_stream_format, dev);
-    RUN(test_supports_multiple_rates, dev);
+    printf("=== Integration Tests ===\n");
+
+    if (mic != kAudioObjectUnknown) {
+        printf("\n-- PouetMicrophone (device ID: %u) --\n", (unsigned)mic);
+        runDeviceTests("Mic", mic);
+    } else {
+        printf("\nWARN: PouetMicrophone not found, skipping\n");
+    }
+
+    if (spk != kAudioObjectUnknown) {
+        printf("\n-- PouetSpeaker (device ID: %u) --\n", (unsigned)spk);
+        runDeviceTests("Spk", spk);
+    } else {
+        printf("\nWARN: PouetSpeaker not found, skipping\n");
+    }
 
     printf("\n%d/%d integration tests passed\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;
