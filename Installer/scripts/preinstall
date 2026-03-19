@@ -4,7 +4,7 @@
 
 set -e
 
-# Kill Pouet app if running (old binary would hold stale SHM mappings)
+# Kill Pouet app if running
 killall Pouet 2>/dev/null || true
 
 # Give it a moment to release resources

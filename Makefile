@@ -20,7 +20,7 @@ BUNDLE_ID     = com.pouet.driver
 VERSION       := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "0.0.0")
 
 # ---- Paths ----
-DRIVER_SRC    = Driver/PouetDriver.c
+DRIVER_SRC    = Driver/PouetLoopback.c
 DRIVER_BUNDLE = build/Pouet.driver
 DRIVER_BINARY = $(DRIVER_BUNDLE)/Contents/MacOS/PouetDriver
 DRIVER_PLIST  = Driver/Pouet.driver/Contents/Info.plist
@@ -47,10 +47,11 @@ CFLAGS        = -arch arm64 -arch x86_64 \
                 -O2 -fvisibility=hidden -fstack-protector-strong \
                 -Wall -Wextra \
                 -framework CoreAudio \
-                -framework CoreFoundation
+                -framework CoreFoundation \
+                -framework Accelerate
 
 # ============================================================
-.PHONY: all run driver gui uninstaller sign pkg install uninstall clean test test-c test-swift test-integration test-audio test-webrtc
+.PHONY: all run driver gui uninstaller sign pkg install uninstall clean test test-integration test-mux
 
 all: driver gui uninstaller
 
@@ -89,7 +90,7 @@ $(GUI_BINARY): Package.swift $(DRIVER_BINARY)
 	@cp App/AppIcon.icns $(GUI_BUNDLE)/Contents/Resources/AppIcon.icns
 	@cp App/Resources/* $(GUI_BUNDLE)/Contents/Resources/
 	@cp -R $(DRIVER_BUNDLE) $(GUI_BUNDLE)/Contents/Resources/Pouet.driver
-	codesign --force --sign - --entitlements App/entitlements.plist $(GUI_BUNDLE)
+	codesign --force --sign "$(DEVID)" --entitlements App/entitlements.plist $(GUI_BUNDLE)
 	@echo "✓ GUI app built → $(GUI_BUNDLE)"
 
 # ---- Uninstaller app ----
@@ -170,27 +171,8 @@ uninstall:
 	@echo "✓ Uninstalled. Pouet driver removed."
 
 # ---- Tests ----
-test: test-c test-swift
+test: test-loopback test-mux
 	@echo "✓ All tests passed"
-
-test-c: Tests/test_driver.c
-	@mkdir -p build
-	clang -O0 -g -Wall -Wextra \
-	    -o build/test_driver \
-	    Tests/test_driver.c -lm -lpthread
-	@echo "--- C driver tests ---"
-	./build/test_driver
-
-test-swift: Tests/test_app.swift Sources/SHMBridge/include/shm_bridge.h Sources/Pouet/Services/AudioMixing.swift
-	@mkdir -p build
-	swiftc -target arm64-apple-macos13.0 \
-	    -sdk $(shell xcrun --show-sdk-path) \
-	    -O -parse-as-library \
-	    -import-objc-header Sources/SHMBridge/include/shm_bridge.h \
-	    -o build/test_app \
-	    Tests/test_app.swift Sources/Pouet/Services/AudioMixing.swift
-	@echo "--- Swift app tests ---"
-	./build/test_app
 
 test-integration: Tests/test_integration.c
 	@mkdir -p build
@@ -201,14 +183,23 @@ test-integration: Tests/test_integration.c
 	@echo "--- Integration tests (requires installed driver) ---"
 	./build/test_integration
 
-test-audio: Tests/tone_injector.c Tests/test_audio.mjs
+test-loopback: Tests/test_loopback.c $(DRIVER_SRC)
 	@mkdir -p build
-	node Tests/test_audio.mjs
+	clang -O0 -g -Wall \
+	    -framework CoreAudio -framework CoreFoundation -framework Accelerate \
+	    -o build/test_loopback \
+	    Tests/test_loopback.c
+	@echo "--- Loopback unit tests (no driver install needed) ---"
+	./build/test_loopback
 
-test-webrtc: Tests/tone_injector.c Tests/webrtc_loopback.html Tests/test_webrtc.mjs
+test-mux: Tests/test_mux.swift Sources/Pouet/Services/VideoMuxing.swift
 	@mkdir -p build
-	@cd "$(CURDIR)" && npm ls playwright >/dev/null 2>&1 || npm install playwright
-	node Tests/test_webrtc.mjs
+	swiftc -O \
+	    -o build/test_mux \
+	    Tests/test_mux.swift \
+	    Sources/Pouet/Services/VideoMuxing.swift
+	@echo "--- Mux tests (no hardware needed) ---"
+	./build/test_mux
 
 clean:
 	rm -rf build .build

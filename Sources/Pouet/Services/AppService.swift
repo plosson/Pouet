@@ -25,8 +25,6 @@ struct AppConfig: Codable {
     var injectVolume: Float?
     var selectedOutputDevice: String?
     var dashcamBufferSeconds: Double?
-    var videoCaptureAudio: Bool?
-    var videoBufferSeconds: Double?
     var hotkeyKeyCode: UInt16?
     var savedInputDefaultUID: String?   // original system default before we switched to Pouet
     var savedOutputDefaultUID: String?  // original system default before we switched to PouetSpeaker
@@ -72,9 +70,6 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var baseDir: String = ""
     @Published var selectedDevice: String = ""
     @Published var volume: Float = 1.0
-    @Published var mainRingPercent = 0
-    @Published var injectRingPercent = 0
-    @Published var injectAvailableSamples = 0
     @Published var injectingURL: URL?
     @Published var micPeakLevel: Float = 0.0
     @Published var injectPeakLevel: Float = 0.0
@@ -112,9 +107,8 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         self.dashcamBufferSeconds = config.dashcamBufferSeconds ?? 5.0
         super.init()
 
-        // Video config
-        video.captureAudio = config.videoCaptureAudio ?? true
-        video.bufferDurationSeconds = config.videoBufferSeconds ?? 5.0
+        // Video buffer matches dashcam duration (audio comes from AudioService)
+        video.bufferDurationSeconds = dashcamBufferSeconds
         video.snapshotsDir = videoSnapshotsDir
 
         // Hotkey config
@@ -130,7 +124,10 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         try? FileManager.default.createDirectory(
             atPath: videoSnapshotsDir, withIntermediateDirectories: true)
 
-        start()
+        // Defer heavy audio setup so SwiftUI can render first
+        DispatchQueue.main.async { [self] in
+            start()
+        }
     }
 
     // MARK: - Lifecycle
@@ -185,9 +182,9 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         config.save()
 
         // Switch system defaults to virtual devices
-        if let vmID = audio.findDeviceByUID("Pouet") {
+        if let vmID = audio.findDeviceByUID("PouetMicrophone") {
             if audio.setSystemDefaultDevice(input: true, deviceID: vmID) {
-                Log.info("System default input -> Pouet")
+                Log.info("System default input -> PouetMicrophone")
             }
         }
         if let vsID = audio.findDeviceByUID("PouetSpeaker") {
@@ -297,26 +294,15 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         config.dashcamBufferSeconds = dashcamBufferSeconds
         config.save()
 
+        // Sync video rolling buffer to same duration
+        video.bufferDurationSeconds = dashcamBufferSeconds
+
         // Restart proxy with new buffer duration if running
         if let deviceName = speakerProxyDeviceName {
             selectOutputDevice(deviceName)
         }
     }
 
-    // MARK: - Video Config
-
-    func setVideoCaptureAudio(_ enabled: Bool) {
-        video.captureAudio = enabled
-        config.videoCaptureAudio = enabled
-        config.save()
-    }
-
-    func setVideoBufferSeconds(_ seconds: Double) {
-        let clamped = max(1, min(10, seconds))
-        video.bufferDurationSeconds = clamped
-        config.videoBufferSeconds = clamped
-        config.save()
-    }
 
     // MARK: - Hotkey Config
 
@@ -348,6 +334,34 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
             Log.error("Dashcam snapshot failed: \(error)")
             return (nil, error.localizedDescription)
         }
+    }
+
+    /// Save video snapshot with muxed dashcam audio
+    func saveVideoSnapshot() async -> (url: URL?, error: String?) {
+        // Save dashcam audio to a temp file for muxing
+        var audioURL: URL? = nil
+        if audio.isSpeakerProxyRunning {
+            let tempAudio = FileManager.default.temporaryDirectory
+                .appendingPathComponent("pouet-dashcam-\(UUID().uuidString).m4a")
+            do {
+                try audio.saveDashcamSnapshot(to: tempAudio)
+                audioURL = tempAudio
+            } catch {
+                Log.warn("No dashcam audio for video snapshot: \(error.localizedDescription)")
+            }
+        }
+
+        let result = await video.saveSnapshot(audioURL: audioURL)
+
+        // Clean up temp audio file
+        if let tempURL = audioURL {
+            try? FileManager.default.removeItem(at: tempURL)
+        }
+
+        if result.url != nil {
+            await MainActor.run { refreshAllSnapshots() }
+        }
+        return result
     }
 
     func refreshSnapshots() {
@@ -503,8 +517,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
     var virtualMicVisible: Bool { audio.virtualMicVisible }
-    var speakerShmAvailable: Bool { audio.speakerRing != nil }
-    var shmAvailable: Bool { audio.mainRing != nil && audio.injectRing != nil }
+    var virtualSpeakerVisible: Bool { audio.virtualSpeakerVisible }
     var hasScreenRecordingPermission: Bool { CGPreflightScreenCaptureAccess() }
 
     private func startHotkeys() {
@@ -521,7 +534,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         hotkey.onVideoSnapshot = { [weak self] in
             guard let self = self else { return }
             Task {
-                let result = await self.video.saveSnapshot()
+                let result = await self.saveVideoSnapshot()
                 await MainActor.run {
                     if let url = result.url {
                         Log.info("Hotkey: video snapshot saved — \(url.lastPathComponent)")
@@ -539,28 +552,22 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         pollTimer?.invalidate()
         pollTimer = Timer.scheduledTimer(withTimeInterval: Self.pollIntervalSeconds, repeats: true) { [weak self] _ in
             guard let self = self else { return }
-            let newMainRing = self.audio.mainRingFillPercent
-            let newInjectRing = self.audio.injectRingFillPercent
-            let newInjectSamples = self.audio.injectRingAvailableSamples
             let newMicPeak = self.audio.micPeakLevel
             let newInjectPeak = self.audio.injectPeakLevel
             let newSpeakerPeak = self.audio.speakerPeakLevel
 
-            if newMainRing != self.mainRingPercent { self.mainRingPercent = newMainRing }
-            if newInjectRing != self.injectRingPercent { self.injectRingPercent = newInjectRing }
-            if newInjectSamples != self.injectAvailableSamples { self.injectAvailableSamples = newInjectSamples }
             if abs(newMicPeak - self.micPeakLevel) > Self.peakChangeThreshold { self.micPeakLevel = newMicPeak }
             if abs(newInjectPeak - self.injectPeakLevel) > Self.peakChangeThreshold { self.injectPeakLevel = newInjectPeak }
             if abs(newSpeakerPeak - self.speakerPeakLevel) > Self.peakChangeThreshold { self.speakerPeakLevel = newSpeakerPeak }
 
-            if self.injectingURL != nil && self.injectAvailableSamples == 0 {
-                self.injectingURL = nil
-            }
+            // Sync proxy state from AudioService
+            let running = self.audio.isProxyRunning
+            if self.proxyRunning != running { self.proxyRunning = running }
+            let name = self.audio.proxyDeviceName
+            if self.proxyDeviceName != name { self.proxyDeviceName = name }
 
-            // Stop speaker output after idle period
-            if let proxy = self.audio.proxy, proxy.idleCallbackCount > 50 {
-                proxy.stopOutputIfIdle()
-                proxy.idleCallbackCount = 0
+            if self.injectingURL != nil && !self.audio.isInjecting {
+                self.injectingURL = nil
             }
         }
     }

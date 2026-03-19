@@ -1,6 +1,6 @@
 #!/bin/bash
 # Pouet Uninstaller
-# Removes the driver, app, shared memory segments, and restarts coreaudiod.
+# Removes the driver, app, and restarts coreaudiod.
 
 HAL_DIR="/Library/Audio/Plug-Ins/HAL"
 DRIVER="$HAL_DIR/Pouet.driver"
@@ -14,7 +14,7 @@ if [ ! -d "$DRIVER" ] && [ ! -d "$APP" ]; then
 fi
 
 # Confirm with user
-RESPONSE=$(osascript -e 'display dialog "This will remove the Pouet driver, app, and shared memory segments.\n\nYour audio output selection will be preserved." buttons {"Cancel", "Uninstall"} default button "Cancel" cancel button "Cancel" with icon caution with title "Pouet Uninstaller"' 2>&1) || exit 0
+RESPONSE=$(osascript -e 'display dialog "This will remove the Pouet driver and app.\n\nYour audio output selection will be preserved." buttons {"Cancel", "Uninstall"} default button "Cancel" cancel button "Cancel" with icon caution with title "Pouet Uninstaller"' 2>&1) || exit 0
 
 # Quit Pouet app if running
 killall Pouet 2>/dev/null || true
@@ -25,9 +25,6 @@ CMDS=""
 [ -d "$DRIVER" ] && CMDS="$CMDS rm -rf '$DRIVER';"
 [ -d "$APP" ] && CMDS="$CMDS rm -rf '$APP';"
 [ -d "$UNINSTALLER" ] && CMDS="$CMDS rm -rf '$UNINSTALLER';"
-
-# Clean up stale shared memory segments (avoid double quotes — they break AppleScript escaping)
-CMDS="$CMDS python3 -c 'import ctypes,sys; rt=ctypes.CDLL(None); [rt.shm_unlink(n.encode()) for n in sys.argv[1:]]' /PouetAudio /PouetSpeakerAudio /PouetInject 2>/dev/null; true;"
 
 # Restart coreaudiod
 CMDS="$CMDS launchctl kickstart -kp system/com.apple.audio.coreaudiod 2>/dev/null || killall coreaudiod 2>/dev/null || true;"

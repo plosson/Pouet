@@ -904,26 +904,12 @@ struct ContentView: View {
                         }
 
                         Spacer()
-
-                        Toggle(isOn: Binding(
-                            get: { video.captureAudio },
-                            set: { app.setVideoCaptureAudio($0) }
-                        )) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "speaker.wave.2")
-                                    .font(.system(size: 10, weight: .bold))
-                                Text("Audio")
-                                    .font(.system(size: 11, weight: .semibold))
-                            }
-                            .foregroundColor(Theme.bodyText)
-                        }
-                        .toggleStyle(.checkbox)
                     }
 
                     // Save video snapshot button
                     Button {
                         Task {
-                            let result = await video.saveSnapshot()
+                            let result = await app.saveVideoSnapshot()
                             if let url = result.url {
                                 showToast("Saved: \(url.lastPathComponent)")
                             } else {
@@ -934,7 +920,7 @@ struct ContentView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "camera.fill")
                                 .font(.system(size: 14, weight: .bold))
-                            Text("Save Video Snapshot (\(Int(video.bufferDurationSeconds))s) — ⌘\(app.hotkey.keyDisplayName)\(app.hotkey.keyDisplayName)")
+                            Text("Save Video Snapshot (\(Int(app.dashcamBufferSeconds))s) — ⌘\(app.hotkey.keyDisplayName)\(app.hotkey.keyDisplayName)")
                                 .font(.system(size: 13, weight: .bold))
                         }
                         .foregroundColor(video.isCapturing ? .white : Theme.dimText)
@@ -1345,9 +1331,9 @@ struct ContentView: View {
 
                         separator
 
-                        // Audio Capture Buffer
+                        // Dashcam Buffer (shared audio + video)
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Audio Buffer")
+                            Text("Dashcam Buffer")
                                 .font(.system(size: 12, weight: .bold))
                                 .foregroundColor(Theme.bodyText)
                             HStack(spacing: 10) {
@@ -1360,30 +1346,7 @@ struct ContentView: View {
                                 }
                                 .tint(Theme.accent)
                             }
-                            Text("Rolling buffer for audio snapshots")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(Theme.dimText)
-                        }
-
-                        separator
-
-                        // Video Capture Buffer
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Video Buffer")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundColor(Theme.bodyText)
-                            HStack(spacing: 10) {
-                                Text("\(Int(video.bufferDurationSeconds))s")
-                                    .font(.system(size: 13, weight: .heavy, design: .monospaced))
-                                    .foregroundColor(Theme.bodyText)
-                                    .frame(width: 30, alignment: .trailing)
-                                Slider(value: Binding(
-                                    get: { video.bufferDurationSeconds },
-                                    set: { app.setVideoBufferSeconds($0) }
-                                ), in: 1...10, step: 1)
-                                .tint(Theme.accent)
-                            }
-                            Text("Rolling buffer for video snapshots")
+                            Text("Rolling buffer for audio & video snapshots")
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundColor(Theme.dimText)
                         }
@@ -1415,16 +1378,6 @@ struct ContentView: View {
                                 .foregroundColor(Theme.dimText)
                         }
 
-                        separator
-
-                        // Ring Buffers
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Ring Buffers")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundColor(Theme.bodyText)
-                            meterRow(label: "Mic -> Apps", percent: app.mainRingPercent, color: Theme.purple)
-                            meterRow(label: "Inject Buffer", percent: app.injectRingPercent, color: Theme.accent)
-                        }
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -1434,9 +1387,8 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         sectionTitle("Health Check", icon: "checkmark.shield.fill")
                         healthRow("Driver installed", ok: app.driverInstalled)
-                        healthRow("Pouet visible", ok: app.virtualMicVisible)
-                        healthRow("Mic shared memory", ok: app.shmAvailable)
-                        healthRow("Speaker shared memory", ok: app.speakerShmAvailable)
+                        healthRow("PouetMicrophone visible", ok: app.virtualMicVisible)
+                        healthRow("PouetSpeaker visible", ok: app.virtualSpeakerVisible)
                         healthRow("Microphone permission", ok: app.hasMicPermission)
                         healthRow("Screen recording", ok: app.hasScreenRecordingPermission)
                         healthRow("Input devices found", ok: !app.devices.isEmpty)

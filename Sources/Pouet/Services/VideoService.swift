@@ -26,7 +26,6 @@ class VideoService: ObservableObject {
     @Published var availableWindows: [WindowInfo] = []
     @Published var selectedWindowID: CGWindowID?
     @Published var isCapturing = false
-    @Published var captureAudio = true
     @Published var bufferDurationSeconds: Double = 5.0
     @Published var recentVideoSnapshots: [URL] = []
 
@@ -36,14 +35,12 @@ class VideoService: ObservableObject {
     private var stream: SCStream?
     private var streamOutput: VideoStreamOutput?
     private let videoQueue = DispatchQueue(label: "com.pouet.video.capture", qos: .userInteractive)
-    private let audioQueue = DispatchQueue(label: "com.pouet.audio.capture", qos: .userInteractive)
 
     // Segment-based rolling buffer: writes 1-second MP4 chunks, keeps last N seconds
     private let segmentDuration: Double = 1.0
     private var segments: [URL] = []
     private var segmentWriter: AVAssetWriter?
     private var segmentVideoInput: AVAssetWriterInput?
-    private var segmentAudioInput: AVAssetWriterInput?
     private var segmentStartTime: CMTime?
     private var firstSampleTime: CMTime?
     private var captureWidth: Int = 1920
@@ -146,18 +143,11 @@ class VideoService: ObservableObject {
         config.minimumFrameInterval = CMTime(value: 1, timescale: 30) // 30fps
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.showsCursor = false
-        config.capturesAudio = captureAudio
-        if captureAudio {
-            config.sampleRate = 48000
-            config.channelCount = 2
-        }
+        config.capturesAudio = false
 
         streamOutput = VideoStreamOutput(service: self)
         let newStream = SCStream(filter: filter, configuration: config, delegate: streamOutput)
         try newStream.addStreamOutput(streamOutput!, type: .screen, sampleHandlerQueue: videoQueue)
-        if captureAudio {
-            try newStream.addStreamOutput(streamOutput!, type: .audio, sampleHandlerQueue: audioQueue)
-        }
 
         captureWidth = config.width
         captureHeight = config.height
@@ -204,7 +194,7 @@ class VideoService: ObservableObject {
 
             // Start a new segment if needed
             if self.segmentWriter == nil {
-                self.startNewSegment(at: pts, hasAudio: self.captureAudio)
+                self.startNewSegment(at: pts)
             }
 
             // Check if current segment exceeded duration
@@ -213,32 +203,22 @@ class VideoService: ObservableObject {
                 if elapsed >= self.segmentDuration {
                     self.finalizeCurrentSegment()
                     self.trimOldSegments()
-                    self.startNewSegment(at: pts, hasAudio: self.captureAudio)
+                    self.startNewSegment(at: pts)
                 }
             }
 
-            // Write to current segment
+            // Write video frame to current segment
             guard let writer = self.segmentWriter, writer.status == .writing else { return }
-
-            switch type {
-            case .screen:
-                if let input = self.segmentVideoInput, input.isReadyForMoreMediaData {
-                    input.append(sampleBuffer)
-                }
-            case .audio, .microphone:
-                if let input = self.segmentAudioInput, input.isReadyForMoreMediaData {
-                    input.append(sampleBuffer)
-                }
-            @unknown default:
-                break
+            if let input = self.segmentVideoInput, input.isReadyForMoreMediaData {
+                input.append(sampleBuffer)
             }
         }
     }
 
     // MARK: - Save Snapshot
 
-    func saveSnapshot() async -> (url: URL?, error: String?) {
-        // Finalize current segment and grab a copy of segments on the writer queue
+    /// Save a video snapshot, muxing in external audio from the dashcam buffer.
+    func saveSnapshot(audioURL: URL? = nil) async -> (url: URL?, error: String?) {
         let segmentsCopy: [URL] = writerQueue.sync {
             finalizeCurrentSegment()
             return Array(segments)
@@ -253,75 +233,20 @@ class VideoService: ObservableObject {
         let filename = "pouet-video-\(formatter.string(from: Date())).mp4"
         let outputURL = URL(fileURLWithPath: (snapshotsDir as NSString).appendingPathComponent(filename))
 
-        // Concatenate segments using AVMutableComposition
-        // Create ONE track for video and ONE for audio, then append all segments into them
-        let composition = AVMutableComposition()
-        let compositionVideoTrack = composition.addMutableTrack(
-            withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid)
-        let compositionAudioTrack = composition.addMutableTrack(
-            withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
-        var insertTime = CMTime.zero
-
-        for segmentURL in segmentsCopy {
-            let asset = AVURLAsset(url: segmentURL)
-            do {
-                let duration = try await asset.load(.duration)
-                let tracks = try await asset.load(.tracks)
-
-                if let videoTrack = tracks.first(where: { $0.mediaType == .video }) {
-                    try compositionVideoTrack?.insertTimeRange(
-                        CMTimeRange(start: .zero, duration: duration),
-                        of: videoTrack, at: insertTime)
-                }
-
-                if let audioTrack = tracks.first(where: { $0.mediaType == .audio }) {
-                    try compositionAudioTrack?.insertTimeRange(
-                        CMTimeRange(start: .zero, duration: duration),
-                        of: audioTrack, at: insertTime)
-                }
-
-                insertTime = CMTimeAdd(insertTime, duration)
-            } catch {
-                Log.warn("Skipping segment \(segmentURL.lastPathComponent): \(error)")
-            }
-        }
-
-        // Remove empty audio track if no audio segments were added
-        if let audioTrack = compositionAudioTrack, audioTrack.segments.isEmpty {
-            composition.removeTrack(audioTrack)
-        }
-
-        guard CMTimeGetSeconds(insertTime) > 0 else {
-            return (nil, "No valid segments to export")
-        }
-
-        // Export to MP4
-        guard let exportSession = AVAssetExportSession(
-            asset: composition, presetName: AVAssetExportPresetHighestQuality) else {
-            return (nil, "Failed to create export session")
-        }
-        exportSession.outputURL = outputURL
-        exportSession.outputFileType = .mp4
-
-        await exportSession.export()
-
-        switch exportSession.status {
-        case .completed:
+        do {
+            try await muxVideoSegments(segmentsCopy, audioURL: audioURL, outputURL: outputURL)
             Log.info("Video snapshot saved: \(outputURL.lastPathComponent)")
             await MainActor.run { refreshVideoSnapshots() }
             return (outputURL, nil)
-        case .failed:
-            let msg = exportSession.error?.localizedDescription ?? "Unknown error"
-            Log.error("Video export failed: \(msg)")
-            return (nil, msg)
-        default:
-            return (nil, "Export cancelled")
+        } catch {
+            Log.error("Video export failed: \(error.localizedDescription)")
+            return (nil, error.localizedDescription)
         }
     }
 
     // MARK: - Segment Management (called on writerQueue)
 
-    private func startNewSegment(at time: CMTime, hasAudio: Bool) {
+    private func startNewSegment(at time: CMTime) {
         let filename = "segment_\(segments.count)_\(ProcessInfo.processInfo.globallyUniqueString).mp4"
         let url = tempDir.appendingPathComponent(filename)
 
@@ -344,21 +269,6 @@ class VideoService: ObservableObject {
         writer.add(videoInput)
         segmentVideoInput = videoInput
 
-        if hasAudio {
-            let audioSettings: [String: Any] = [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: 48000,
-                AVNumberOfChannelsKey: 2,
-                AVEncoderBitRateKey: 128000,
-            ]
-            let audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
-            audioInput.expectsMediaDataInRealTime = true
-            writer.add(audioInput)
-            segmentAudioInput = audioInput
-        } else {
-            segmentAudioInput = nil
-        }
-
         writer.startWriting()
         writer.startSession(atSourceTime: time)
         segmentWriter = writer
@@ -368,7 +278,6 @@ class VideoService: ObservableObject {
     private func finalizeCurrentSegment() {
         guard let writer = segmentWriter else { return }
         segmentVideoInput?.markAsFinished()
-        segmentAudioInput?.markAsFinished()
 
         let semaphore = DispatchSemaphore(value: 0)
         writer.finishWriting { semaphore.signal() }
@@ -383,7 +292,6 @@ class VideoService: ObservableObject {
 
         segmentWriter = nil
         segmentVideoInput = nil
-        segmentAudioInput = nil
         segmentStartTime = nil
     }
 

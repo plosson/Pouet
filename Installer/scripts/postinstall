@@ -11,23 +11,6 @@ DRIVER="$HAL_DIR/Pouet.driver"
 chown -R root:wheel "$DRIVER"
 chmod -R 755 "$DRIVER"
 
-# Remove stale shared memory segments from previous installs.
-# Old versions may have created segments with wrong permissions (0600)
-# or a different header layout, which would prevent the new driver/app
-# from working correctly. Fresh segments are created on next launch.
-cat > /tmp/_pouet_shm_cleanup.c << 'CLEANUP'
-#include <sys/mman.h>
-int main(void) {
-    shm_unlink("/PouetAudio");
-    shm_unlink("/PouetSpeakerAudio");
-    shm_unlink("/PouetInject");
-    return 0;
-}
-CLEANUP
-cc -o /tmp/_pouet_shm_cleanup /tmp/_pouet_shm_cleanup.c 2>/dev/null && \
-    /tmp/_pouet_shm_cleanup 2>/dev/null || true
-rm -f /tmp/_pouet_shm_cleanup /tmp/_pouet_shm_cleanup.c
-
 # Gracefully restart CoreAudio daemon.
 # Use launchctl kickstart which lets coreaudiod shut down cleanly
 # and restore the user's device preferences on restart.
