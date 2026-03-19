@@ -30,6 +30,8 @@
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>Pouet needs microphone access to proxy your real microphone.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Pouet needs screen recording access for video dashcam capture.</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsLocalNetworking</key>

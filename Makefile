@@ -90,7 +90,7 @@ $(GUI_BINARY): Package.swift $(DRIVER_BINARY)
 	@cp App/AppIcon.icns $(GUI_BUNDLE)/Contents/Resources/AppIcon.icns
 	@cp App/Resources/* $(GUI_BUNDLE)/Contents/Resources/
 	@cp -R $(DRIVER_BUNDLE) $(GUI_BUNDLE)/Contents/Resources/Pouet.driver
-	codesign --force --sign "$(DEVID)" --entitlements App/entitlements.plist $(GUI_BUNDLE)
+	codesign --force --options runtime --sign "$(DEVID)" --entitlements App/entitlements.plist $(GUI_BUNDLE)
 	@echo "✓ GUI app built → $(GUI_BUNDLE)"
 
 # ---- Uninstaller app ----
