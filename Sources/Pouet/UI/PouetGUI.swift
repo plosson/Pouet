@@ -120,7 +120,7 @@ struct PouetGUI: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(app: app, video: app.video)
+            ContentView(app: app)
                 .frame(minWidth: 520, minHeight: 600)
                 .frame(idealWidth: 820, idealHeight: 700)
                 .onAppear { delegate.appService = app }
