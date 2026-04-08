@@ -284,6 +284,94 @@ static int test_data_integrity(void) {
     return 1;
 }
 
+static int test_translate_uid_to_device_accepts_valid_qualifier(void) {
+    AudioObjectPropertyAddress addr = {
+        kAudioPlugInPropertyTranslateUIDToDevice,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    AudioObjectID outID = kAudioObjectUnknown;
+    UInt32 outSize = 0;
+    CFStringRef uid = get_device_uid();
+
+    OSStatus err = PouetLoopback_GetPlugInPropertyData(
+        gAudioServerPlugInDriverRef,
+        kObjectID_PlugIn,
+        0,
+        &addr,
+        sizeof(uid),
+        &uid,
+        sizeof(outID),
+        &outSize,
+        &outID
+    );
+
+    CFRelease(uid);
+
+    ASSERT(err == noErr, "TranslateUIDToDevice returned %d", (int)err);
+    ASSERT(outID == kObjectID_Device, "expected device object id, got %u", (unsigned)outID);
+    ASSERT(outSize == sizeof(outID), "unexpected out size %u", (unsigned)outSize);
+    return 1;
+}
+
+static int test_translate_uid_to_box_accepts_valid_qualifier(void) {
+    AudioObjectPropertyAddress addr = {
+        kAudioPlugInPropertyTranslateUIDToBox,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    AudioObjectID outID = kAudioObjectUnknown;
+    UInt32 outSize = 0;
+    CFStringRef uid = get_box_uid();
+
+    OSStatus err = PouetLoopback_GetPlugInPropertyData(
+        gAudioServerPlugInDriverRef,
+        kObjectID_PlugIn,
+        0,
+        &addr,
+        sizeof(uid),
+        &uid,
+        sizeof(outID),
+        &outSize,
+        &outID
+    );
+
+    CFRelease(uid);
+
+    ASSERT(err == noErr, "TranslateUIDToBox returned %d", (int)err);
+    ASSERT(outID == kObjectID_Box, "expected box object id, got %u", (unsigned)outID);
+    ASSERT(outSize == sizeof(outID), "unexpected out size %u", (unsigned)outSize);
+    return 1;
+}
+
+static int test_plugin_owned_objects_reports_box_and_device(void) {
+    AudioObjectPropertyAddress addr = {
+        kAudioObjectPropertyOwnedObjects,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    AudioObjectID outIDs[2] = { 0, 0 };
+    UInt32 outSize = 0;
+
+    OSStatus err = PouetLoopback_GetPlugInPropertyData(
+        gAudioServerPlugInDriverRef,
+        kObjectID_PlugIn,
+        0,
+        &addr,
+        0,
+        NULL,
+        sizeof(outIDs),
+        &outSize,
+        outIDs
+    );
+
+    ASSERT(err == noErr, "OwnedObjects returned %d", (int)err);
+    ASSERT(outSize == sizeof(outIDs), "expected two object ids, got %u bytes", (unsigned)outSize);
+    ASSERT(outIDs[0] == kObjectID_Box, "first owned object should be box");
+    ASSERT(outIDs[1] == kObjectID_Device, "second owned object should be device");
+    return 1;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -296,6 +384,9 @@ int main(void) {
     RUN(test_device_isolation);
     RUN(test_device_isolation_reverse);
     RUN(test_data_integrity);
+    RUN(test_translate_uid_to_device_accepts_valid_qualifier);
+    RUN(test_translate_uid_to_box_accepts_valid_qualifier);
+    RUN(test_plugin_owned_objects_reports_box_and_device);
 
     printf("\n%d/%d loopback tests passed\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;

@@ -788,6 +788,15 @@ static OSStatus	PouetLoopback_Initialize(AudioServerPlugInDriverRef inDriver, Au
 	theHostClockFrequency *= 1000000000.0;
 	gDevice_HostTicksPerFrame = theHostClockFrequency / gDevice_SampleRate;
     gDevice_AdjustedTicksPerFrame = gDevice_HostTicksPerFrame - gDevice_HostTicksPerFrame/100.0 * 2.0*(gPitch_Adjust - 0.5);
+
+    if(gRingBuffer == NULL)
+    {
+        gRingBuffer = calloc(kRing_Buffer_Frame_Size * kNumber_Of_Channels, sizeof(Float32));
+    }
+    if(gRingBuffer2 == NULL)
+    {
+        gRingBuffer2 = calloc(kRing_Buffer_Frame_Size * kNumber_Of_Channels, sizeof(Float32));
+    }
     
     // DebugMsg("BlackHole theTimeBaseInfo.numer: %u \t theTimeBaseInfo.denom: %u", theTimeBaseInfo.numer, theTimeBaseInfo.denom);
 	
@@ -1458,11 +1467,11 @@ static OSStatus	PouetLoopback_GetPlugInPropertyData(AudioServerPlugInDriverRef i
 			}
 			
 			//	Write the devices' object IDs into the return value
-			if(theNumberItemsToFetch > 1)
-			{
-				((AudioObjectID*)outData)[0] = kObjectID_Box;
-				((AudioObjectID*)outData)[0] = kObjectID_Device;
-			}
+				if(theNumberItemsToFetch > 1)
+				{
+					((AudioObjectID*)outData)[0] = kObjectID_Box;
+					((AudioObjectID*)outData)[1] = kObjectID_Device;
+				}
 			else if(theNumberItemsToFetch > 0)
 			{
 				((AudioObjectID*)outData)[0] = kObjectID_Box;
@@ -1501,7 +1510,7 @@ static OSStatus	PouetLoopback_GetPlugInPropertyData(AudioServerPlugInDriverRef i
 			//	qualifier doesn't match any devices. In such case, kAudioObjectUnknown is
 			//	the object ID to return.
 			FailWithAction(inDataSize < sizeof(AudioObjectID), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetPlugInPropertyData: not enough space for the return value of kAudioPlugInPropertyTranslateUIDToBox");
-			FailWithAction(inQualifierDataSize == sizeof(CFStringRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetPlugInPropertyData: the qualifier is the wrong size for kAudioPlugInPropertyTranslateUIDToBox");
+			FailWithAction(inQualifierDataSize != sizeof(CFStringRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetPlugInPropertyData: the qualifier is the wrong size for kAudioPlugInPropertyTranslateUIDToBox");
 			FailWithAction(inQualifierData == NULL, theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetPlugInPropertyData: no qualifier for kAudioPlugInPropertyTranslateUIDToBox");
 
 			CFStringRef boxUID = get_box_uid();
@@ -1554,7 +1563,7 @@ static OSStatus	PouetLoopback_GetPlugInPropertyData(AudioServerPlugInDriverRef i
 			//	qualifier doesn't match any devices. In such case, kAudioObjectUnknown is
 			//	the object ID to return.
 			FailWithAction(inDataSize < sizeof(AudioObjectID), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetPlugInPropertyData: not enough space for the return value of kAudioPlugInPropertyTranslateUIDToDevice");
-			FailWithAction(inQualifierDataSize == sizeof(CFStringRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetPlugInPropertyData: the qualifier is the wrong size for kAudioPlugInPropertyTranslateUIDToDevice");
+			FailWithAction(inQualifierDataSize != sizeof(CFStringRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetPlugInPropertyData: the qualifier is the wrong size for kAudioPlugInPropertyTranslateUIDToDevice");
 			FailWithAction(inQualifierData == NULL, theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetPlugInPropertyData: no qualifier for kAudioPlugInPropertyTranslateUIDToDevice");
             
             
@@ -4328,14 +4337,22 @@ static OSStatus	PouetLoopback_StartIO(AudioServerPlugInDriverRef inDriver, Audio
         gDevice_PreviousTicks = 0;
     }
 
-    // Allocate per-device ring buffers
-    if (gDevice_IOIsRunning && gRingBuffer == NULL)
+    if (inDeviceObjectID == kObjectID_Device && gRingBuffer == NULL)
     {
         gRingBuffer = calloc(kRing_Buffer_Frame_Size * kNumber_Of_Channels, sizeof(Float32));
     }
-    if (gDevice2_IOIsRunning && gRingBuffer2 == NULL)
+    if (inDeviceObjectID == kObjectID_Device2 && gRingBuffer2 == NULL)
     {
         gRingBuffer2 = calloc(kRing_Buffer_Frame_Size * kNumber_Of_Channels, sizeof(Float32));
+    }
+
+    if (inDeviceObjectID == kObjectID_Device && gRingBuffer != NULL)
+    {
+        vDSP_vclr(gRingBuffer, 1, kRing_Buffer_Frame_Size * kNumber_Of_Channels);
+    }
+    if (inDeviceObjectID == kObjectID_Device2 && gRingBuffer2 != NULL)
+    {
+        vDSP_vclr(gRingBuffer2, 1, kRing_Buffer_Frame_Size * kNumber_Of_Channels);
     }
     
     
@@ -4369,16 +4386,13 @@ static OSStatus	PouetLoopback_StopIO(AudioServerPlugInDriverRef inDriver, AudioO
     if (inDeviceObjectID == kObjectID_Device) { gDevice_IOIsRunning -= 1; }
     if (inDeviceObjectID == kObjectID_Device2) { gDevice2_IOIsRunning -= 1; }
 
-    // Free per-device ring buffers
     if (!gDevice_IOIsRunning && gRingBuffer != NULL)
     {
-        free(gRingBuffer);
-        gRingBuffer = NULL;
+        vDSP_vclr(gRingBuffer, 1, kRing_Buffer_Frame_Size * kNumber_Of_Channels);
     }
     if (!gDevice2_IOIsRunning && gRingBuffer2 != NULL)
     {
-        free(gRingBuffer2);
-        gRingBuffer2 = NULL;
+        vDSP_vclr(gRingBuffer2, 1, kRing_Buffer_Frame_Size * kNumber_Of_Channels);
     }
 	
 	//	unlock the state lock

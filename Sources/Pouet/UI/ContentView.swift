@@ -131,6 +131,7 @@ private class FloatingHeadsState: ObservableObject {
     var mouseY: CGFloat = -1000
     private var timer: Timer?
     private var lastTime: CFAbsoluteTime = 0
+    private let sleepWakeMonitor = SleepWakeMonitor()
 
     private let maxSpeed: CGFloat = 1.0
     private let fleeRadius: CGFloat = 150
@@ -157,11 +158,26 @@ private class FloatingHeadsState: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             self?.step()
         }
+
+        sleepWakeMonitor.start(
+            onSleep: { [weak self] in
+                self?.timer?.invalidate()
+                self?.timer = nil
+            },
+            onWake: { [weak self] in
+                guard self?.timer == nil else { return }
+                self?.lastTime = CFAbsoluteTimeGetCurrent()
+                self?.timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+                    self?.step()
+                }
+            }
+        )
     }
 
     func stopTimer() {
         timer?.invalidate()
         timer = nil
+        sleepWakeMonitor.stop()
     }
 
     private func step() {
@@ -255,6 +271,7 @@ private class FloatingHeadsState: ObservableObject {
 private struct FloatingHeadsView: View {
     @ObservedObject var state: FloatingHeadsState
     @State private var viewOrigin: CGPoint = .zero
+    @State private var mouseMonitor: Any?
 
     var body: some View {
         GeometryReader { geo in
@@ -285,19 +302,23 @@ private struct FloatingHeadsView: View {
             )
         }
         .allowsHitTesting(false)
-        .onAppear { state.startTimer(); startMouseTracking() }
-        .onDisappear { state.stopTimer() }
-    }
-
-    private func startMouseTracking() {
-        NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { event in
-            if let window = NSApp.mainWindow {
-                let windowPoint = event.locationInWindow
-                let flipped = NSPoint(x: windowPoint.x - viewOrigin.x, y: window.frame.height - windowPoint.y - viewOrigin.y)
-                state.mouseX = flipped.x
-                state.mouseY = flipped.y
+        .onAppear {
+            state.startTimer()
+            mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak state] event in
+                guard let state = state else { return event }
+                if let window = NSApp.mainWindow {
+                    let windowPoint = event.locationInWindow
+                    let flipped = NSPoint(x: windowPoint.x - viewOrigin.x, y: window.frame.height - windowPoint.y - viewOrigin.y)
+                    state.mouseX = flipped.x
+                    state.mouseY = flipped.y
+                }
+                return event
             }
-            return event
+        }
+        .onDisappear {
+            state.stopTimer()
+            if let m = mouseMonitor { NSEvent.removeMonitor(m) }
+            mouseMonitor = nil
         }
     }
 
@@ -1730,7 +1751,8 @@ struct ContentView: View {
         rm -rf \(dst)/Pouet.driver; \
         cp -R \\\"\(src)\\\" \(dst)/; \
         chown -R root:wheel \(dst)/Pouet.driver; \
-        killall -9 coreaudiod 2>/dev/null || true" with administrator privileges
+        chmod -R 755 \(dst)/Pouet.driver; \
+        launchctl kickstart -kp system/com.apple.audio.coreaudiod 2>/dev/null || killall coreaudiod 2>/dev/null || true" with administrator privileges
         """
         DispatchQueue.global(qos: .userInitiated).async {
             var error: NSDictionary?
@@ -1752,7 +1774,7 @@ struct ContentView: View {
 
         let script = """
         do shell script "rm -rf /Library/Audio/Plug-Ins/HAL/Pouet.driver; \
-        killall -9 coreaudiod 2>/dev/null || true" with administrator privileges
+        launchctl kickstart -kp system/com.apple.audio.coreaudiod 2>/dev/null || killall coreaudiod 2>/dev/null || true" with administrator privileges
         """
         DispatchQueue.global(qos: .userInitiated).async {
             var error: NSDictionary?

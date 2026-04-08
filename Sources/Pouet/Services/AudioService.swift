@@ -195,8 +195,13 @@ class AudioService {
     private var injectTapInstalled = false
 
     private func updateInjectMeteringTap() {
-        guard let eng = engine, !injectTapInstalled else { return }
+        guard let eng = engine else { return }
         let mixer = eng.mainMixerNode
+        // Always remove existing tap before installing new one
+        if injectTapInstalled {
+            mixer.removeTap(onBus: 0)
+            injectTapInstalled = false
+        }
         let format = mixer.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { return }
 
@@ -315,6 +320,10 @@ class AudioService {
         return ids
     }
 
+    func allDeviceUIDs() -> [String] {
+        allDeviceIDs().compactMap { deviceUID(for: $0) }
+    }
+
     func findDeviceByExactUID(_ uid: String) -> AudioDeviceID? {
         allDeviceIDs().first { devID in
             getAudioDeviceStringProperty(devID, selector: kAudioDevicePropertyDeviceUID) == uid
@@ -339,6 +348,11 @@ class AudioService {
             AudioObjectID(kAudioObjectSystemObject), &propAddr, 0, nil, &size, &deviceID) == noErr,
               deviceID != 0 else { return nil }
         return deviceID
+    }
+
+    func defaultDeviceUID(input: Bool) -> String? {
+        guard let deviceID = getSystemDefaultDevice(input: input) else { return nil }
+        return getAudioDeviceStringProperty(deviceID, selector: kAudioDevicePropertyDeviceUID)
     }
 
     /// Returns current system default, but nil if it's a virtual device (crash recovery safety)
@@ -386,6 +400,7 @@ class AudioService {
     private var dashcamWriteIndex: Int = 0
     private var dashcamSampleRate: Double = 48000
     private var dashcamChannelCount: UInt32 = 2
+    private let dashcamLock = DispatchQueue(label: "com.pouet.dashcam.lock")
 
     func startSpeakerProxy(deviceID: AudioDeviceID, deviceName: String, bufferDuration: Double) throws {
         stopSpeakerProxy()
@@ -448,10 +463,12 @@ class AudioService {
             guard let channelData = buffer.floatChannelData else { return }
             let frameLength = Int(buffer.frameLength)
             let channels = Int(buffer.format.channelCount)
-            for i in 0..<frameLength {
-                for ch in 0..<channels {
-                    self.dashcamBuffer[self.dashcamWriteIndex % self.dashcamBufferCapacity] = channelData[ch][i]
-                    self.dashcamWriteIndex += 1
+            self.dashcamLock.sync {
+                for i in 0..<frameLength {
+                    for ch in 0..<channels {
+                        self.dashcamBuffer[self.dashcamWriteIndex % self.dashcamBufferCapacity] = channelData[ch][i]
+                        self.dashcamWriteIndex += 1
+                    }
                 }
             }
         }
@@ -482,7 +499,11 @@ class AudioService {
                           userInfo: [NSLocalizedDescriptionKey: "Speaker proxy not running"])
         }
 
-        let totalWritten = dashcamWriteIndex
+        // Snapshot the write index and buffer under the lock
+        let (totalWritten, bufferSnapshot): (Int, [Float]) = dashcamLock.sync {
+            (dashcamWriteIndex, dashcamBuffer)
+        }
+
         let sampleCount = min(totalWritten, dashcamBufferCapacity)
         guard sampleCount > 0 else {
             throw NSError(domain: "AudioService", code: -2,
@@ -504,7 +525,7 @@ class AudioService {
         }
         pcmBuffer.frameLength = AVAudioFrameCount(frameCount)
 
-        // Copy from rolling buffer (interleaved) to PCM buffer (non-interleaved)
+        // Copy from rolling buffer snapshot (interleaved) to PCM buffer (non-interleaved)
         let startIndex = (totalWritten >= dashcamBufferCapacity)
             ? (totalWritten % dashcamBufferCapacity)
             : 0
@@ -517,7 +538,7 @@ class AudioService {
         for frame in 0..<frameCount {
             for ch in 0..<Int(channels) {
                 let srcIdx = (startIndex + frame * Int(channels) + ch) % dashcamBufferCapacity
-                floatChannelData[ch][frame] = dashcamBuffer[srcIdx]
+                floatChannelData[ch][frame] = bufferSnapshot[srcIdx]
             }
         }
 
@@ -542,6 +563,45 @@ class AudioService {
         try file.write(from: pcmBuffer)
         Log.info("Dashcam snapshot saved: \(url.lastPathComponent) (\(frameCount) frames)")
     }
+
+    // MARK: - Sleep/Wake
+
+    /// Pause audio engines for system sleep — prevents stale state on wake
+    func pauseForSleep() {
+        engine?.pause()
+        speakerEngine?.pause()
+        Log.info("Audio engines paused for sleep")
+    }
+
+    /// Resume audio engines after system wake
+    @discardableResult
+    func resumeAfterWake() -> Bool {
+        do {
+            if let eng = engine, !eng.isRunning {
+                try eng.start()
+            }
+            if let eng = speakerEngine, !eng.isRunning {
+                try eng.start()
+            }
+            Log.info("Audio engines resumed after wake")
+            return true
+        } catch {
+            Log.error("Failed to resume audio engines: \(error)")
+            return false
+        }
+    }
+}
+
+extension AudioService: RoutingAudioBackend {
+    func setSystemDefaultDevice(input: Bool, uid: String) -> Bool {
+        guard let deviceID = findDeviceByExactUID(uid) else { return false }
+        return setSystemDefaultDevice(input: input, deviceID: deviceID)
+    }
+
+    func virtualDeviceUID(input: Bool) -> String? {
+        let fragment = input ? "PouetMicrophone" : "PouetSpeaker"
+        return allDeviceUIDs().first(where: { $0.contains(fragment) })
+    }
 }
 
 // MARK: - CoreAudio Property Helpers
@@ -552,11 +612,9 @@ private func getAudioDeviceStringProperty(_ devID: AudioDeviceID, selector: Audi
         mScope: kAudioObjectPropertyScopeGlobal,
         mElement: kAudioObjectPropertyElementMain
     )
-    var size: UInt32 = 0
-    guard AudioObjectGetPropertyDataSize(devID, &addr, 0, nil, &size) == noErr, size > 0 else { return nil }
-    let buf = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<CFString>.alignment)
-    defer { buf.deallocate() }
-    guard AudioObjectGetPropertyData(devID, &addr, 0, nil, &size, buf) == noErr else { return nil }
-    let cfStr = Unmanaged<CFString>.fromOpaque(buf.load(as: UnsafeRawPointer.self)).takeUnretainedValue()
-    return cfStr as String
+    var value: Unmanaged<CFString>?
+    var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+    guard AudioObjectGetPropertyData(devID, &addr, 0, nil, &size, &value) == noErr,
+          let value else { return nil }
+    return value.takeUnretainedValue() as String
 }

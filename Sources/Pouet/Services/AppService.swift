@@ -83,19 +83,21 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var speakerPeakLevel: Float = 0.0
     @Published var recentSnapshots: [URL] = []
     @Published var previewingURL: URL?
+    @Published var allRecordings: [RecordingItem] = []
 
     var soundsDir: String { (baseDir as NSString).appendingPathComponent("Sounds") }
     var audioSnapshotsDir: String { (baseDir as NSString).appendingPathComponent("Recordings/Audio") }
     var videoSnapshotsDir: String { (baseDir as NSString).appendingPathComponent("Recordings/Video") }
 
-    private static let pollIntervalSeconds = 0.05    // 50ms — smooth meters without excessive CPU
-    private static let peakChangeThreshold: Float = 0.005  // 0.5% of full scale, avoids UI thrashing
+    private static let pollIntervalSeconds = 0.1     // 100ms — smooth enough for meters
+    private static let peakChangeThreshold: Float = 0.02  // 2% of full scale
     private static let maxRecentSnapshots = 10
 
     private var config: AppConfig
     private var pollTimer: Timer?
-    private var originalInputDeviceID: AudioDeviceID?
-    private var originalOutputDeviceID: AudioDeviceID?
+    private var routingCoordinator = RoutingCoordinator()
+    private var didShutdown = false
+    private let sleepWakeMonitor = SleepWakeMonitor()
 
     // MARK: - Init
 
@@ -133,6 +135,8 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     // MARK: - Lifecycle
 
     func start() {
+        if isRunning { return }
+        didShutdown = false
         Log.info("AppService starting")
         isRunning = true
         loadDevices()
@@ -140,86 +144,59 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         refreshSounds()
         refreshSnapshots()
 
-        // Restore defaults from a previous crash (config has UIDs that weren't cleared)
-        if let savedUID = config.savedInputDefaultUID,
-           let deviceID = audio.findDeviceByExactUID(savedUID) {
-            if audio.setSystemDefaultDevice(input: true, deviceID: deviceID) {
-                Log.info("Crash recovery: restored system default input from saved UID")
-            }
-            config.savedInputDefaultUID = nil
-        }
-        if let savedUID = config.savedOutputDefaultUID,
-           let deviceID = audio.findDeviceByExactUID(savedUID) {
-            if audio.setSystemDefaultDevice(input: false, deviceID: deviceID) {
-                Log.info("Crash recovery: restored system default output from saved UID")
-            }
-            config.savedOutputDefaultUID = nil
-        }
-        config.save()
-
-        // Save original system defaults BEFORE any changes (skip if already virtual)
-        originalInputDeviceID = audio.getNonVirtualDefaultDevice(input: true)
-        originalOutputDeviceID = audio.getNonVirtualDefaultDevice(input: false)
-
-        // Persist UIDs so we can restore on crash recovery
-        if let id = originalInputDeviceID {
-            config.savedInputDefaultUID = audio.deviceUID(for: id)
-        }
-        if let id = originalOutputDeviceID {
-            config.savedOutputDefaultUID = audio.deviceUID(for: id)
-        }
+        restoreSystemDefaultsFromCrashIfNeeded()
+        beginRoutingSession()
         config.save()
 
         // Auto-start proxies: saved device or system default
         let micName = config.selectedDevice
             ?? audio.defaultDevice(input: true)?.name
-        if let name = micName { selectMicDevice(name) }
+        let micReady = micName.map(selectMicDevice(_:)) ?? false
 
         let outputName = config.selectedOutputDevice
             ?? audio.defaultDevice(input: false)?.name
-        if let name = outputName { selectOutputDevice(name) }
+        let outputReady = outputName.map(selectOutputDevice(_:)) ?? false
 
         config.save()
 
-        // Switch system defaults to virtual devices
-        if let vmID = audio.findDeviceByUID("PouetMicrophone") {
-            if audio.setSystemDefaultDevice(input: true, deviceID: vmID) {
-                Log.info("System default input -> PouetMicrophone")
-            }
-        }
-        if let vsID = audio.findDeviceByUID("PouetSpeaker") {
-            if audio.setSystemDefaultDevice(input: false, deviceID: vsID) {
-                Log.info("System default output -> PouetSpeaker")
-            }
+        if !applyAutomaticRoutingTakeover(micReady: micReady, outputReady: outputReady) {
+            Log.warn("Automatic routing takeover skipped or rolled back")
         }
 
         startPolling()
         startHotkeys()
+
+        sleepWakeMonitor.start(
+            onSleep: { [weak self] in
+                Log.info("Sleep/screen sleep — pausing")
+                self?.stopPolling()
+                self?.audio.pauseForSleep()
+            },
+            onWake: { [weak self] in
+                Log.info("Wake/screen wake — resuming")
+                guard let self else { return }
+                let resumed = self.audio.resumeAfterWake()
+                if !resumed || !self.audio.virtualMicVisible || !self.audio.virtualSpeakerVisible {
+                    self.handleRuntimeRoutingFailure(reason: resumed ? "virtual devices disappeared after wake" : "audio engine resume failed")
+                    return
+                }
+                self.startPolling()
+            }
+        )
     }
 
     func shutdown() {
+        if didShutdown { return }
+        didShutdown = true
         hotkey.stop()
         stopPolling()
         audio.stopProxy()
         audio.stopSpeakerProxy()
         Task { await video.stopCapture() }
 
-        // Restore original system defaults
-        if let origIn = originalInputDeviceID {
-            if audio.setSystemDefaultDevice(input: true, deviceID: origIn) {
-                Log.info("Restored system default input")
-            }
-        }
-        if let origOut = originalOutputDeviceID {
-            if audio.setSystemDefaultDevice(input: false, deviceID: origOut) {
-                Log.info("Restored system default output")
-            }
-        }
+        restoreRoutingOnShutdown()
 
-        // Clear saved UIDs — clean shutdown means no crash recovery needed
-        config.savedInputDefaultUID = nil
-        config.savedOutputDefaultUID = nil
-        config.save()
+        sleepWakeMonitor.stop()
 
         isRunning = false
         proxyRunning = false
@@ -250,10 +227,11 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     // MARK: - Device Selection (auto-starts proxy)
 
-    func selectMicDevice(_ name: String) {
+    @discardableResult
+    func selectMicDevice(_ name: String) -> Bool {
         guard let device = audio.findDevice(matching: name) else {
             Log.error("Mic device not found: \(name)")
-            return
+            return false
         }
         do {
             try audio.startProxy(deviceID: device.id, deviceName: device.name, inputChannels: device.inputChannels, volume: volume)
@@ -262,17 +240,20 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
             selectedDevice = device.name
             config.selectedDevice = device.name
             config.save()
+            return true
         } catch {
             Log.error("Mic proxy failed: \(error)")
             proxyRunning = false
             proxyDeviceName = nil
+            return false
         }
     }
 
-    func selectOutputDevice(_ name: String) {
+    @discardableResult
+    func selectOutputDevice(_ name: String) -> Bool {
         guard let device = audio.findOutputDevice(matching: name) else {
             Log.error("Output device not found: \(name)")
-            return
+            return false
         }
         do {
             try audio.startSpeakerProxy(deviceID: device.id, deviceName: device.name, bufferDuration: dashcamBufferSeconds)
@@ -282,10 +263,12 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
             config.selectedOutputDevice = device.name
             config.save()
             Log.info("Speaker proxy started: \(device.name) (buffer: \(dashcamBufferSeconds)s)")
+            return true
         } catch {
             Log.error("Speaker proxy start failed: \(error)")
             speakerProxyRunning = false
             speakerProxyDeviceName = nil
+            return false
         }
     }
 
@@ -383,7 +366,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     // MARK: - All Recordings (merged audio + video)
 
-    var allRecordings: [RecordingItem] {
+    private func rebuildAllRecordings() {
         let fm = FileManager.default
         let audioItems = recentSnapshots.map { url -> RecordingItem in
             let date = (try? fm.attributesOfItem(atPath: url.path)[.creationDate] as? Date) ?? .distantPast
@@ -393,7 +376,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
             let date = (try? fm.attributesOfItem(atPath: url.path)[.creationDate] as? Date) ?? .distantPast
             return RecordingItem(id: url.absoluteString, url: url, kind: .video, date: date)
         }
-        return (audioItems + videoItems)
+        allRecordings = (audioItems + videoItems)
             .sorted { $0.date > $1.date }
             .prefix(10)
             .map { $0 }
@@ -402,6 +385,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     func refreshAllSnapshots() {
         refreshSnapshots()
         video.refreshVideoSnapshots()
+        rebuildAllRecordings()
     }
 
     // MARK: - Preview (local playback via speakers)
@@ -575,6 +559,73 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private func stopPolling() {
         pollTimer?.invalidate()
         pollTimer = nil
+    }
+
+    private func restoreSystemDefaultsFromCrashIfNeeded() {
+        var persistence = persistenceState()
+        routingCoordinator.restoreCrashRecovery(persistence: &persistence, audio: audio)
+        applyPersistenceState(persistence)
+    }
+
+    private func beginRoutingSession() {
+        var persistence = persistenceState()
+        routingCoordinator.beginLaunch(persistence: &persistence, audio: audio)
+        applyPersistenceState(persistence)
+    }
+
+    private func applyAutomaticRoutingTakeover(micReady: Bool, outputReady: Bool) -> Bool {
+        guard micReady, outputReady else {
+            return false
+        }
+        if routingCoordinator.applyAutomaticTakeover(audio: audio) {
+            Log.info("System defaults switched to Pouet virtual devices")
+            return true
+        } else {
+            rollbackRoutingAfterStartupFailure()
+            return false
+        }
+    }
+
+    private func rollbackRoutingAfterStartupFailure() {
+        var persistence = persistenceState()
+        routingCoordinator.rollbackAfterStartupFailure(persistence: &persistence, audio: audio)
+        applyPersistenceState(persistence)
+        config.save()
+    }
+
+    private func restoreRoutingOnShutdown() {
+        var persistence = persistenceState()
+        routingCoordinator.restoreOnShutdown(persistence: &persistence, audio: audio)
+        applyPersistenceState(persistence)
+        config.save()
+    }
+
+    private func handleRuntimeRoutingFailure(reason: String) {
+        Log.error("Routing runtime failure: \(reason)")
+        stopPolling()
+        hotkey.stop()
+        audio.stopProxy()
+        audio.stopSpeakerProxy()
+        var persistence = persistenceState()
+        routingCoordinator.restoreAfterRuntimeFailure(persistence: &persistence, audio: audio)
+        applyPersistenceState(persistence)
+        config.save()
+        proxyRunning = false
+        speakerProxyRunning = false
+        proxyDeviceName = nil
+        speakerProxyDeviceName = nil
+    }
+
+    private func persistenceState() -> RoutingPersistenceState {
+        RoutingPersistenceState(
+            savedInputDefaultUID: config.savedInputDefaultUID,
+            savedOutputDefaultUID: config.savedOutputDefaultUID
+        )
+    }
+
+    private func applyPersistenceState(_ persistence: RoutingPersistenceState) {
+        config.savedInputDefaultUID = persistence.savedInputDefaultUID
+        config.savedOutputDefaultUID = persistence.savedOutputDefaultUID
     }
 
     deinit {

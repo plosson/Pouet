@@ -51,7 +51,7 @@ CFLAGS        = -arch arm64 -arch x86_64 \
                 -framework Accelerate
 
 # ============================================================
-.PHONY: all run driver gui uninstaller sign pkg install uninstall clean test test-integration test-mux
+.PHONY: all run driver gui uninstaller sign pkg install uninstall clean test test-integration test-mux test-routing test-routing-coordinator test-install-scripts
 
 all: driver gui uninstaller
 
@@ -90,7 +90,8 @@ $(GUI_BINARY): Package.swift $(DRIVER_BINARY)
 	@cp App/AppIcon.icns $(GUI_BUNDLE)/Contents/Resources/AppIcon.icns
 	@cp App/Resources/* $(GUI_BUNDLE)/Contents/Resources/
 	@cp -R $(DRIVER_BUNDLE) $(GUI_BUNDLE)/Contents/Resources/Pouet.driver
-	codesign --force --options runtime --sign "$(DEVID)" --entitlements App/entitlements.plist $(GUI_BUNDLE)
+	codesign --force --options runtime --sign "$(DEVID)" --identifier $(BUNDLE_ID) --timestamp $(GUI_BUNDLE)/Contents/Resources/Pouet.driver
+	codesign --force --options runtime --sign "$(DEVID)" --entitlements App/entitlements.plist --timestamp $(GUI_BUNDLE)
 	@echo "✓ GUI app built → $(GUI_BUNDLE)"
 
 # ---- Uninstaller app ----
@@ -160,18 +161,18 @@ install: driver gui
 	sudo rm -rf $(HAL_DIR)/Pouet.driver
 	sudo cp -R $(DRIVER_BUNDLE) $(HAL_DIR)/
 	sudo chown -R root:wheel $(HAL_DIR)/Pouet.driver
-	sudo killall -9 coreaudiod 2>/dev/null || true
+	sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod 2>/dev/null || sudo killall coreaudiod 2>/dev/null || true
 	@sleep 2
 	@echo "✓ Installed. Virtual mic should appear in Sound settings."
 
 uninstall:
 	sudo rm -rf $(HAL_DIR)/Pouet.driver
-	sudo killall -9 coreaudiod 2>/dev/null || true
+	sudo launchctl kickstart -kp system/com.apple.audio.coreaudiod 2>/dev/null || sudo killall coreaudiod 2>/dev/null || true
 	@sleep 2
 	@echo "✓ Uninstalled. Pouet driver removed."
 
 # ---- Tests ----
-test: test-loopback test-mux
+test: test-loopback test-mux test-routing test-routing-coordinator test-install-scripts
 	@echo "✓ All tests passed"
 
 test-integration: Tests/test_integration.c
@@ -200,6 +201,29 @@ test-mux: Tests/test_mux.swift Sources/Pouet/Services/VideoMuxing.swift
 	    Sources/Pouet/Services/VideoMuxing.swift
 	@echo "--- Mux tests (no hardware needed) ---"
 	./build/test_mux
+
+test-routing: Tests/test_routing.swift Sources/Pouet/Services/RoutingSafety.swift
+	@mkdir -p build
+	swiftc -O \
+	    -o build/test_routing \
+	    Tests/test_routing.swift \
+	    Sources/Pouet/Services/RoutingSafety.swift
+	@echo "--- Routing safety tests (no hardware needed) ---"
+	./build/test_routing
+
+test-routing-coordinator: Tests/test_routing_coordinator.swift Sources/Pouet/Services/RoutingCoordinator.swift Sources/Pouet/Services/RoutingSafety.swift
+	@mkdir -p build
+	swiftc -O \
+	    -o build/test_routing_coordinator \
+	    Tests/test_routing_coordinator.swift \
+	    Sources/Pouet/Services/RoutingCoordinator.swift \
+	    Sources/Pouet/Services/RoutingSafety.swift
+	@echo "--- Routing coordinator tests (no hardware needed) ---"
+	./build/test_routing_coordinator
+
+test-install-scripts: Tests/test_install_scripts.sh
+	@echo "--- Install script safety tests ---"
+	bash Tests/test_install_scripts.sh
 
 clean:
 	rm -rf build .build
