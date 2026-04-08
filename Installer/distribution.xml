@@ -19,6 +19,6 @@
     </choice>
 
     <pkg-ref id="com.pouet.driver"
-             version="1.0.0"
+             version="6.0.1"
              onConclusion="none">Pouet_component.pkg</pkg-ref>
 </installer-gui-script>
