@@ -1,7 +1,7 @@
 # Makefile — Pouet Audio Server Plugin + companion app
 #
 # Requirements:
-#   - macOS 13+ SDK (Xcode Command Line Tools)
+#   - macOS 15+ SDK (Xcode Command Line Tools)
 #   - Apple Developer ID certificate for code-signing
 #   - Developer ID Installer certificate for pkg signing
 #
@@ -43,7 +43,7 @@ INSTALLER_ID  ?= Developer ID Installer: SPRL Losson (427N276E3Q)
 # ---- Compiler flags (driver only — Swift uses SPM) ----
 CC            = clang
 CFLAGS        = -arch arm64 -arch x86_64 \
-                -mmacosx-version-min=12.0 \
+                -mmacosx-version-min=15.0 \
                 -O2 -fvisibility=hidden -fstack-protector-strong \
                 -Wall -Wextra \
                 -framework CoreAudio \
@@ -51,7 +51,7 @@ CFLAGS        = -arch arm64 -arch x86_64 \
                 -framework Accelerate
 
 # ============================================================
-.PHONY: all run driver gui uninstaller sign pkg install uninstall clean test test-integration test-mux test-routing test-routing-coordinator test-install-scripts
+.PHONY: all run driver gui uninstaller sign pkg install uninstall clean test test-integration test-mux test-routing test-routing-coordinator test-install-scripts test-platform-targets
 
 all: driver gui uninstaller
 
@@ -172,7 +172,7 @@ uninstall:
 	@echo "✓ Uninstalled. Pouet driver removed."
 
 # ---- Tests ----
-test: test-loopback test-mux test-routing test-routing-coordinator test-install-scripts
+test: test-loopback test-mux test-routing test-routing-coordinator test-install-scripts test-platform-targets
 	@echo "✓ All tests passed"
 
 test-integration: Tests/test_integration.c
@@ -224,6 +224,10 @@ test-routing-coordinator: Tests/test_routing_coordinator.swift Sources/Pouet/Ser
 test-install-scripts: Tests/test_install_scripts.sh
 	@echo "--- Install script safety tests ---"
 	bash Tests/test_install_scripts.sh
+
+test-platform-targets: Tests/test_platform_targets.sh
+	@echo "--- Platform target tests ---"
+	bash Tests/test_platform_targets.sh
 
 clean:
 	rm -rf build .build

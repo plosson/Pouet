@@ -34,7 +34,7 @@ or FLAC file — it appears as a real mic input to every app on your Mac.
 
 ## Requirements
 
-- macOS 13 Ventura or later (Intel or Apple Silicon)
+- macOS 15 or later (Intel or Apple Silicon)
 - Xcode Command Line Tools (`xcode-select --install`) — provides `swift build` and `clang`
 - Apple Developer Program membership (for signing + notarization)
 

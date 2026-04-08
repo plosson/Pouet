@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Pouet",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS("15.0")],
     targets: [
         .executableTarget(
             name: "Pouet",
