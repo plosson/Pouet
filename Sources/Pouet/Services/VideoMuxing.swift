@@ -58,19 +58,8 @@ func muxVideoSegments(
         asset: composition, presetName: AVAssetExportPresetHighestQuality) else {
         throw MuxError.exportSessionFailed
     }
-    exportSession.outputURL = outputURL
-    exportSession.outputFileType = .mp4
 
-    await exportSession.export()
-
-    switch exportSession.status {
-    case .completed:
-        return
-    case .failed:
-        throw MuxError.exportFailed(exportSession.error?.localizedDescription ?? "Unknown error")
-    default:
-        throw MuxError.exportFailed("Export cancelled")
-    }
+    try await exportSession.export(to: outputURL, as: .mp4)
 }
 
 enum MuxError: LocalizedError {

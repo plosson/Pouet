@@ -281,9 +281,12 @@ class VideoService: ObservableObject {
 
         let semaphore = DispatchSemaphore(value: 0)
         writer.finishWriting { semaphore.signal() }
-        semaphore.wait()
+        let result = semaphore.wait(timeout: .now() + 3.0)
 
-        if writer.status == .completed {
+        if result == .timedOut {
+            Log.error("Segment finalization timed out, cancelling writer")
+            writer.cancelWriting()
+        } else if writer.status == .completed {
             segments.append(writer.outputURL)
         } else if let error = writer.error {
             Log.error("Segment finalization error: \(error)")
