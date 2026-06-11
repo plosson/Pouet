@@ -30,6 +30,8 @@ jobs:
           security unlock-keychain -p "" build.keychain
           security import /tmp/app.p12 -k build.keychain -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
           security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+          # Prevent the keychain auto-locking mid-build ("User interaction is not allowed")
+          security set-keychain-settings -lut 21600 build.keychain
           rm /tmp/app.p12
 
       - name: Import Installer certificate
@@ -52,6 +54,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set +e
+          set -o pipefail  # without this, RESULT would be tee's exit code (always 0)
           xcrun notarytool submit build/Pouet-*.pkg \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \

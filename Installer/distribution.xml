@@ -5,7 +5,8 @@
     <license    file="License.txt"  mime-type="text/plain"/>
     <conclusion file="Conclusion.html" mime-type="text/html"/>
 
-    <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <!-- arm64 only: the app binary is built for the host arch (Apple silicon) -->
+    <options customize="never" require-scripts="false" hostArchitectures="arm64"/>
 
     <choices-outline>
         <line choice="com.pouet.driver.choice"/>

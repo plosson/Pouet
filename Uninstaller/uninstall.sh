@@ -5,7 +5,7 @@
 HAL_DIR="/Library/Audio/Plug-Ins/HAL"
 DRIVER="$HAL_DIR/Pouet.driver"
 APP="/Applications/Pouet.app"
-UNINSTALLER="/Applications/Uninstall Pouet.app"
+UNINSTALLER="/Applications/UninstallPouet.app"
 
 # Check if driver is installed
 if [ ! -d "$DRIVER" ] && [ ! -d "$APP" ]; then

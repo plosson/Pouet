@@ -295,7 +295,7 @@ private struct FloatingHeadsView: View {
                 GeometryReader { inner in
                     Color.clear.onAppear {
                         viewOrigin = inner.frame(in: .global).origin
-                    }.onChange(of: inner.frame(in: .global).origin) { newOrigin in
+                    }.onChange(of: inner.frame(in: .global).origin) { _, newOrigin in
                         viewOrigin = newOrigin
                     }
                 }
@@ -306,9 +306,12 @@ private struct FloatingHeadsView: View {
             state.startTimer()
             mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak state] event in
                 guard let state = state else { return event }
-                if let window = NSApp.mainWindow {
+                // Use the event's own window; flip against the content view height
+                // (window.frame includes the title bar and would offset the cursor)
+                if let contentView = event.window?.contentView {
                     let windowPoint = event.locationInWindow
-                    let flipped = NSPoint(x: windowPoint.x - viewOrigin.x, y: window.frame.height - windowPoint.y - viewOrigin.y)
+                    let flipped = NSPoint(x: windowPoint.x - viewOrigin.x,
+                                          y: contentView.frame.height - windowPoint.y - viewOrigin.y)
                     state.mouseX = flipped.x
                     state.mouseY = flipped.y
                 }
@@ -322,10 +325,21 @@ private struct FloatingHeadsView: View {
         }
     }
 
+    // Loaded once — body re-evaluates 60×/s, so loading from disk here would
+    // decode hundreds of images per second
+    private static var imageCache: [String: NSImage?] = [:]
+
+    private static func cachedImage(_ name: String) -> NSImage? {
+        if let cached = imageCache[name] { return cached }
+        let image = Bundle.main.path(forResource: name, ofType: "png")
+            .flatMap { NSImage(contentsOfFile: $0) }
+        imageCache[name] = image
+        return image
+    }
+
     private func headImage(_ name: String, size: CGFloat) -> some View {
         Group {
-            if let resourcePath = Bundle.main.path(forResource: name, ofType: "png"),
-               let nsImage = NSImage(contentsOfFile: resourcePath) {
+            if let nsImage = Self.cachedImage(name) {
                 Image(nsImage: nsImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
@@ -346,6 +360,7 @@ struct ContentView: View {
     @ObservedObject var video: VideoService
 
     @State private var toast: String?
+    @State private var toastGeneration = 0
     @State private var currentApp: String? = nil
     @State private var selectedTab = 0
     @State private var showUninstallConfirm = false
@@ -376,6 +391,9 @@ struct ContentView: View {
             if let msg = notification.object as? String {
                 showToast(msg)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .requestUninstall)) { _ in
+            showUninstallConfirm = true
         }
         .alert("Uninstall Driver", isPresented: $showUninstallConfirm) {
             Button("Cancel", role: .cancel) {}
@@ -827,7 +845,7 @@ struct ContentView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "camera.fill")
                                 .font(.system(size: 14, weight: .bold))
-                            Text("Save Audio Snapshot (\(Int(app.dashcamBufferSeconds))s) — ⌘\(app.hotkey.keyDisplayName)")
+                            Text("Save Audio Snapshot (\(Int(app.dashcamBufferSeconds))s) — ⌘\(app.hotkeyDisplayName)")
                                 .font(.system(size: 13, weight: .bold))
                         }
                         .foregroundColor(app.speakerProxyRunning ? .white : Theme.dimText)
@@ -941,7 +959,7 @@ struct ContentView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "camera.fill")
                                 .font(.system(size: 14, weight: .bold))
-                            Text("Save Video Snapshot (\(Int(app.dashcamBufferSeconds))s) — ⌘\(app.hotkey.keyDisplayName)\(app.hotkey.keyDisplayName)")
+                            Text("Save Video Snapshot (\(Int(app.dashcamBufferSeconds))s) — ⌘\(app.hotkeyDisplayName)\(app.hotkeyDisplayName)")
                                 .font(.system(size: 13, weight: .bold))
                         }
                         .foregroundColor(video.isCapturing ? .white : Theme.dimText)
@@ -1384,7 +1402,7 @@ struct ContentView: View {
                                     .font(.system(size: 14, weight: .bold))
                                     .foregroundColor(Theme.dimText)
                                 Picker("", selection: Binding(
-                                    get: { UInt16(app.hotkey.keyCode) },
+                                    get: { app.hotkeyKeyCode },
                                     set: { app.setHotkeyKey($0) }
                                 )) {
                                     ForEach(HotkeyService.availableKeys, id: \.keyCode) { key in
@@ -1394,7 +1412,7 @@ struct ContentView: View {
                                 .labelsHidden()
                                 .frame(width: 60)
                             }
-                            Text("Audio: ⌘\(app.hotkey.keyDisplayName) · Video: ⌘\(app.hotkey.keyDisplayName)\(app.hotkey.keyDisplayName)")
+                            Text("Audio: ⌘\(app.hotkeyDisplayName) · Video: ⌘\(app.hotkeyDisplayName)\(app.hotkeyDisplayName)")
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundColor(Theme.dimText)
                         }
@@ -1687,8 +1705,12 @@ struct ContentView: View {
     // MARK: - Actions
 
     private func showToast(_ msg: String) {
+        toastGeneration += 1
+        let generation = toastGeneration
         withAnimation(.easeOut(duration: 0.2)) { toast = msg }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            // A newer toast may have replaced this one — don't dismiss it early
+            guard generation == toastGeneration else { return }
             withAnimation(.easeIn(duration: 0.3)) { toast = nil }
         }
     }
@@ -1754,17 +1776,11 @@ struct ContentView: View {
         chmod -R 755 \(dst)/Pouet.driver; \
         launchctl kickstart -kp system/com.apple.audio.coreaudiod 2>/dev/null || killall coreaudiod 2>/dev/null || true" with administrator privileges
         """
-        DispatchQueue.global(qos: .userInitiated).async {
-            var error: NSDictionary?
-            if let appleScript = NSAppleScript(source: script) {
-                appleScript.executeAndReturnError(&error)
-                DispatchQueue.main.async {
-                    if error == nil {
-                        showToast("Driver installed — restarting Core Audio")
-                    } else {
-                        showToast("Install cancelled or failed")
-                    }
-                }
+        runAppleScript(script) { ok in
+            if ok {
+                showToast("Driver installed — restarting Core Audio")
+            } else {
+                showToast("Install cancelled or failed")
             }
         }
     }
@@ -1776,18 +1792,33 @@ struct ContentView: View {
         do shell script "rm -rf /Library/Audio/Plug-Ins/HAL/Pouet.driver; \
         launchctl kickstart -kp system/com.apple.audio.coreaudiod 2>/dev/null || killall coreaudiod 2>/dev/null || true" with administrator privileges
         """
+        runAppleScript(script) { ok in
+            if ok {
+                showToast("Driver uninstalled — Core Audio restarted")
+                app.loadDevices()
+            } else {
+                showToast("Uninstall cancelled or failed")
+            }
+        }
+    }
+
+    /// Run AppleScript via osascript in a child process. NSAppleScript is
+    /// main-thread-only and would block the UI for the whole admin prompt.
+    private func runAppleScript(_ script: String, completion: @escaping (Bool) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            var error: NSDictionary?
-            if let appleScript = NSAppleScript(source: script) {
-                appleScript.executeAndReturnError(&error)
-                DispatchQueue.main.async {
-                    if error == nil {
-                        showToast("Driver uninstalled — Core Audio restarted")
-                        app.loadDevices()
-                    } else {
-                        showToast("Uninstall cancelled or failed")
-                    }
-                }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", script]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            do {
+                try process.run()
+                process.waitUntilExit()
+                let ok = process.terminationStatus == 0
+                DispatchQueue.main.async { completion(ok) }
+            } catch {
+                Log.error("osascript launch failed: \(error)")
+                DispatchQueue.main.async { completion(false) }
             }
         }
     }

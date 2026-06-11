@@ -102,6 +102,35 @@ struct RoutingCoordinatorTests {
             try assert(persistence.savedOutputDefaultUID == "BuiltInSpeaker", "launch should capture output")
         }
 
+        run("test_begin_launch_keeps_saved_uid_for_unplugged_device") {
+            // Crash with takeover applied, original device unplugged: recovery keeps
+            // the saved UID; beginLaunch (current default = virtual) must not wipe it.
+            let audio = FakeRoutingAudioBackend(
+                availableUIDs: ["PouetMicrophone_UID", "PouetSpeaker_UID", "BuiltInSpeaker"],
+                currentInputUID: "PouetMicrophone_UID",
+                currentOutputUID: "BuiltInSpeaker",
+                virtualInputUID: "PouetMicrophone_UID",
+                virtualOutputUID: "PouetSpeaker_UID"
+            )
+            var persistence = RoutingPersistenceState(
+                savedInputDefaultUID: "USBHeadset",
+                savedOutputDefaultUID: "BuiltInSpeaker"
+            )
+            var coordinator = RoutingCoordinator()
+
+            coordinator.restoreCrashRecovery(persistence: &persistence, audio: audio)
+            try assert(persistence.savedInputDefaultUID == "USBHeadset",
+                       "recovery should keep UID of unplugged input")
+            try assert(persistence.savedOutputDefaultUID == nil,
+                       "recovery should restore and clear available output")
+
+            coordinator.beginLaunch(persistence: &persistence, audio: audio)
+            try assert(persistence.savedInputDefaultUID == "USBHeadset",
+                       "beginLaunch must not wipe the kept input UID")
+            try assert(persistence.savedOutputDefaultUID == "BuiltInSpeaker",
+                       "beginLaunch should capture the restored output default")
+        }
+
         run("test_takeover_failure_rolls_back_input_only") {
             let audio = FakeRoutingAudioBackend(
                 availableUIDs: ["BuiltInMic", "BuiltInSpeaker", "PouetMicrophone_UID", "PouetSpeaker_UID"],

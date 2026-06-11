@@ -18,19 +18,19 @@ run_test() {
 }
 
 assert_package_targets_macos15() {
-    rg -n 'platforms: \[\.macOS\("15\.0"\)\]' Package.swift >/dev/null
+    grep -nE 'platforms: \[\.macOS\("15\.0"\)\]' Package.swift >/dev/null
 }
 
 assert_makefile_targets_macos15() {
-    rg -n -- '-mmacosx-version-min=15\.0' Makefile >/dev/null
+    grep -nE -- '-mmacosx-version-min=15\.0' Makefile >/dev/null
 }
 
 assert_plists_target_macos15() {
-    rg -n '<string>15\.0</string>' App/Info.plist Uninstaller/Info.plist >/dev/null
+    grep -nE '<string>15\.0</string>' App/Info.plist Uninstaller/Info.plist >/dev/null
 }
 
 assert_ci_uses_macos15() {
-    rg -n 'runs-on: macos-15' .github/workflows/build.yml >/dev/null
+    grep -nE 'runs-on: macos-15' .github/workflows/build.yml >/dev/null
 }
 
 echo "=== Platform Target Tests ==="

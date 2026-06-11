@@ -344,13 +344,13 @@ static int test_translate_uid_to_box_accepts_valid_qualifier(void) {
     return 1;
 }
 
-static int test_plugin_owned_objects_reports_box_and_device(void) {
+static int test_plugin_owned_objects_reports_box_and_devices(void) {
     AudioObjectPropertyAddress addr = {
         kAudioObjectPropertyOwnedObjects,
         kAudioObjectPropertyScopeGlobal,
         kAudioObjectPropertyElementMain
     };
-    AudioObjectID outIDs[2] = { 0, 0 };
+    AudioObjectID outIDs[3] = { 0, 0, 0 };
     UInt32 outSize = 0;
 
     OSStatus err = PouetLoopback_GetPlugInPropertyData(
@@ -366,9 +366,97 @@ static int test_plugin_owned_objects_reports_box_and_device(void) {
     );
 
     ASSERT(err == noErr, "OwnedObjects returned %d", (int)err);
-    ASSERT(outSize == sizeof(outIDs), "expected two object ids, got %u bytes", (unsigned)outSize);
+    ASSERT(outSize == sizeof(outIDs), "expected three object ids, got %u bytes", (unsigned)outSize);
     ASSERT(outIDs[0] == kObjectID_Box, "first owned object should be box");
     ASSERT(outIDs[1] == kObjectID_Device, "second owned object should be device");
+    ASSERT(outIDs[2] == kObjectID_Device2, "third owned object should be device 2");
+    return 1;
+}
+
+// The control-list size and fill paths must agree: if the size counts an entry
+// the fill skips (e.g. the pitch control while disabled), the fill loop reads
+// past the end of the device object list.
+static int test_control_list_size_matches_fill(void) {
+    AudioObjectPropertyScope scopes[] = {
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyScopeInput,
+        kAudioObjectPropertyScopeOutput
+    };
+    AudioObjectID devices[] = { kObjectID_Device, kObjectID_Device2 };
+
+    for (int d = 0; d < 2; d++) {
+        for (int s = 0; s < 3; s++) {
+            AudioObjectPropertyAddress addr = {
+                kAudioObjectPropertyControlList,
+                scopes[s],
+                kAudioObjectPropertyElementMain
+            };
+            UInt32 reportedSize = 0;
+            OSStatus err = PouetLoopback_GetDevicePropertyDataSize(
+                gAudioServerPlugInDriverRef, devices[d], 0, &addr, 0, NULL, &reportedSize);
+            ASSERT(err == noErr, "ControlList size returned %d", (int)err);
+
+            AudioObjectID outIDs[16] = { 0 };
+            UInt32 outSize = 0;
+            err = PouetLoopback_GetDevicePropertyData(
+                gAudioServerPlugInDriverRef, devices[d], 0, &addr, 0, NULL,
+                sizeof(outIDs), &outSize, outIDs);
+            ASSERT(err == noErr, "ControlList fill returned %d", (int)err);
+            ASSERT(outSize == reportedSize,
+                   "device %u scope %d: size %u != filled %u",
+                   (unsigned)devices[d], s, (unsigned)reportedSize, (unsigned)outSize);
+
+            // every returned ID must be a control, and belong to the right device
+            for (UInt32 i = 0; i < outSize / sizeof(AudioObjectID); i++) {
+                ASSERT(outIDs[i] != 0 &&
+                       !is_stream_id(outIDs[i]) &&
+                       outIDs[i] <= kObjectID_Mute_Output_Master2,
+                       "device %u scope %d: bogus control id %u",
+                       (unsigned)devices[d], s, (unsigned)outIDs[i]);
+                ASSERT(devices[d] == kObjectID_Device
+                           ? !is_device2_object_id(outIDs[i])
+                           : is_device2_object_id(outIDs[i]),
+                       "device %u scope %d: control id %u belongs to the other device",
+                       (unsigned)devices[d], s, (unsigned)outIDs[i]);
+            }
+        }
+    }
+    return 1;
+}
+
+// Muting PouetSpeaker (Device2) must not mute PouetMicrophone (Device1):
+// with shared control state, muting the speaker silenced what Zoom reads
+// from the virtual mic.
+static int test_mute_isolation_between_devices(void) {
+    AudioObjectPropertyAddress addr = {
+        kAudioBooleanControlPropertyValue,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    UInt32 muteOn = 1;
+    UInt32 numChanged = 0;
+    AudioObjectPropertyAddress changed[4];
+
+    OSStatus err = PouetLoopback_SetControlPropertyData(
+        gAudioServerPlugInDriverRef, kObjectID_Mute_Output_Master2, 0, &addr,
+        0, NULL, sizeof(muteOn), &muteOn, &numChanged, changed);
+    ASSERT(err == noErr, "muting device 2 returned %d", (int)err);
+    ASSERT(gMute2_Master_Value, "device 2 mute should be set");
+    ASSERT(!gMute_Master_Value, "device 1 mute must NOT be set by device 2's control");
+
+    // Device1's loopback must still carry signal while Device2 is muted
+    float writeRMS = 0, readRMS = 0;
+    ASSERT(doLoopbackCycle(kObjectID_Device, kObjectID_Device, &writeRMS, &readRMS),
+           "device 1 loopback cycle failed");
+    ASSERT(readRMS > RMS_SIGNAL_THRESHOLD,
+           "device 1 should still pass audio while device 2 is muted (RMS=%f)", readRMS);
+
+    // restore
+    UInt32 muteOff = 0;
+    err = PouetLoopback_SetControlPropertyData(
+        gAudioServerPlugInDriverRef, kObjectID_Mute_Output_Master2, 0, &addr,
+        0, NULL, sizeof(muteOff), &muteOff, &numChanged, changed);
+    ASSERT(err == noErr, "unmuting device 2 returned %d", (int)err);
     return 1;
 }
 
@@ -386,7 +474,9 @@ int main(void) {
     RUN(test_data_integrity);
     RUN(test_translate_uid_to_device_accepts_valid_qualifier);
     RUN(test_translate_uid_to_box_accepts_valid_qualifier);
-    RUN(test_plugin_owned_objects_reports_box_and_device);
+    RUN(test_plugin_owned_objects_reports_box_and_devices);
+    RUN(test_control_list_size_matches_fill);
+    RUN(test_mute_isolation_between_devices);
 
     printf("\n%d/%d loopback tests passed\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;

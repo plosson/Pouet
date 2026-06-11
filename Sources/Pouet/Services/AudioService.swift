@@ -1,10 +1,21 @@
-// AudioService.swift — Audio engine using AVAudioEngine loopback
-// Captures real mic, mixes in soundboard audio, outputs to PouetMicrophone loopback device
+// AudioService.swift — Audio proxies built on AVAudioEngine + the loopback driver
+//
+// On macOS a single AVAudioEngine cannot run input and output on two DIFFERENT
+// devices: the input side silently never starts (zero buffers, no error). Each
+// proxy therefore uses TWO engines bridged by a ring buffer:
+//
+//   capture engine (input device, tap) → ring buffer → playback engine
+//                                        (source node → mixer → output device)
+//
+//   Mic proxy:     real mic → ring → [+ inject submixer] → PouetMicrophone
+//   Speaker proxy: PouetSpeaker → ring → real speakers
+//                  (capture tap also feeds the dashcam rolling buffer)
 
 import Foundation
 import AVFoundation
 import CoreAudio
 import AudioToolbox
+import os
 
 // MARK: - Audio Device Info
 
@@ -30,10 +41,246 @@ private func peakLevel(from buffer: AVAudioPCMBuffer) -> Float {
     return peak
 }
 
+private func peakLevel(of samples: UnsafeBufferPointer<Float>) -> Float {
+    var peak: Float = 0.0
+    for value in samples {
+        let abs = Swift.abs(value)
+        if abs > peak { peak = abs }
+    }
+    return peak
+}
+
+/// Single-producer single-consumer interleaved float ring buffer bridging the
+/// capture and playback engines. Underruns produce silence; overruns drop the
+/// oldest samples (absorbs clock drift between the two devices).
+private final class AudioRingBuffer {
+    private struct State {
+        var storage: [Float]
+        var readIndex = 0
+        var writeIndex = 0
+    }
+    private let capacity: Int  // in samples
+    private let channels: Int
+    private let state: OSAllocatedUnfairLock<State>
+
+    init(frameCapacity: Int, channels: Int) {
+        self.capacity = frameCapacity * channels
+        self.channels = channels
+        self.state = OSAllocatedUnfairLock(
+            initialState: State(storage: [Float](repeating: 0, count: frameCapacity * channels)))
+    }
+
+    func writeInterleaved(_ samples: UnsafeBufferPointer<Float>, channels bufferChannels: Int) {
+        guard bufferChannels > 0 else { return }
+        let frames = samples.count / bufferChannels
+        state.withLockUnchecked { s in
+            for f in 0..<frames {
+                for ch in 0..<channels {
+                    s.storage[s.writeIndex % capacity] = samples[f * bufferChannels + min(ch, bufferChannels - 1)]
+                    s.writeIndex += 1
+                }
+            }
+            if s.writeIndex - s.readIndex > capacity {
+                // overrun: skip the oldest samples, staying frame-aligned
+                let lag = s.writeIndex - s.readIndex - capacity
+                s.readIndex += ((lag + channels - 1) / channels) * channels
+            }
+        }
+    }
+
+    /// Fill a deinterleaved AudioBufferList (one buffer per channel), padding
+    /// with silence when not enough samples are buffered yet.
+    func read(into bufferList: UnsafeMutablePointer<AudioBufferList>, frameCount: Int) {
+        let buffers = UnsafeMutableAudioBufferListPointer(bufferList)
+        state.withLockUnchecked { s in
+            for f in 0..<frameCount {
+                let frameAvailable = (s.writeIndex - s.readIndex) >= channels
+                for (ch, buffer) in buffers.enumerated() {
+                    let out = UnsafeMutableBufferPointer<Float>(buffer)
+                    guard f < out.count else { continue }
+                    out[f] = frameAvailable ? s.storage[(s.readIndex + min(ch, channels - 1)) % capacity] : 0
+                }
+                if frameAvailable { s.readIndex += channels }
+            }
+        }
+    }
+}
+
+/// One audio proxy: a raw HAL IOProc reading the input device, an AVAudioEngine
+/// writing the output device, bridged by an AudioRingBuffer.
+///
+/// Capture deliberately does NOT use AVAudioEngine.inputNode: multiple engines
+/// with input nodes in one process are unreliable (the second one silently
+/// delivers zeros), and this app needs two simultaneous captures (real mic +
+/// PouetSpeaker). Raw HAL clients have no such limit.
+private final class ProxyEngine {
+    let playbackEngine = AVAudioEngine()
+    let captureFormat: AVAudioFormat
+
+    /// Called on the capture IO thread with each interleaved Float32 buffer
+    var onCaptureSamples: ((UnsafeBufferPointer<Float>, Int) -> Void)?
+
+    /// Called on the main thread when the capture device disappears
+    var onCaptureFailure: (() -> Void)?
+
+    private let captureDeviceID: AudioDeviceID
+    private var captureProcID: AudioDeviceIOProcID?
+    private var captureStarted = false
+    private let captureQueue: DispatchQueue
+    private var aliveListener: AudioObjectPropertyListenerBlock?
+    private let ring: AudioRingBuffer
+    private var sourceNode: AVAudioSourceNode!
+
+    init(inputDeviceID: AudioDeviceID, outputDeviceID: AudioDeviceID) throws {
+        captureDeviceID = inputDeviceID
+        captureQueue = DispatchQueue(label: "com.pouet.proxy.capture.\(inputDeviceID)")
+
+        var outDev = outputDeviceID
+        guard let outputAU = playbackEngine.outputNode.audioUnit,
+              AudioUnitSetProperty(outputAU, kAudioOutputUnitProperty_CurrentDevice,
+                                   kAudioUnitScope_Global, 0, &outDev,
+                                   UInt32(MemoryLayout<AudioDeviceID>.size)) == noErr else {
+            throw NSError(domain: "AudioService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to set output device"])
+        }
+
+        // HAL clients always see Float32 in the device's virtual stream format
+        var formatAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamFormat,
+            mScope: kAudioDevicePropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain)
+        var asbd = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        let formatStatus = AudioObjectGetPropertyData(inputDeviceID, &formatAddr, 0, nil, &size, &asbd)
+        guard formatStatus == noErr, asbd.mSampleRate > 0, asbd.mChannelsPerFrame > 0,
+              let format = AVAudioFormat(standardFormatWithSampleRate: asbd.mSampleRate,
+                                         channels: asbd.mChannelsPerFrame) else {
+            throw NSError(domain: "AudioService", code: -2,
+                          userInfo: [NSLocalizedDescriptionKey: "Input device has no valid format (\(formatStatus))"])
+        }
+        captureFormat = format
+
+        // ~340 ms of slack at 48 kHz absorbs clock drift between the devices
+        let ringBuffer = AudioRingBuffer(frameCapacity: 16384, channels: Int(format.channelCount))
+        ring = ringBuffer
+
+        guard let sourceFormat = AVAudioFormat(
+            standardFormatWithSampleRate: format.sampleRate, channels: format.channelCount) else {
+            throw NSError(domain: "AudioService", code: -3,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to build source format"])
+        }
+        sourceNode = AVAudioSourceNode(format: sourceFormat) { _, _, frameCount, bufferList -> OSStatus in
+            ringBuffer.read(into: bufferList, frameCount: Int(frameCount))
+            return noErr
+        }
+        playbackEngine.attach(sourceNode)
+        playbackEngine.connect(sourceNode, to: playbackEngine.mainMixerNode, format: sourceFormat)
+
+        // Raw HAL capture client: interleaved Float32 frames → ring + hook
+        var procID: AudioDeviceIOProcID?
+        let procStatus = AudioDeviceCreateIOProcIDWithBlock(&procID, inputDeviceID, captureQueue) {
+            [weak self] _, inData, _, _, _ in
+            let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inData))
+            guard buffers.count > 0, let base = buffers[0].mData else { return }
+            let sampleCount = Int(buffers[0].mDataByteSize) / MemoryLayout<Float>.size
+            let bufferChannels = max(1, Int(buffers[0].mNumberChannels))
+            let samples = UnsafeBufferPointer(start: base.assumingMemoryBound(to: Float.self),
+                                              count: sampleCount)
+            ringBuffer.writeInterleaved(samples, channels: bufferChannels)
+            self?.onCaptureSamples?(samples, bufferChannels)
+        }
+        guard procStatus == noErr, let procID else {
+            throw NSError(domain: "AudioService", code: Int(procStatus),
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to create capture IO proc: \(procStatus)"])
+        }
+        captureProcID = procID
+
+        // Detect the capture device disappearing (e.g. USB mic unplugged)
+        var aliveAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsAlive,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            DispatchQueue.main.async {
+                guard let self, self.captureStarted else { return }
+                var alive: UInt32 = 1
+                var aliveSize = UInt32(MemoryLayout<UInt32>.size)
+                var addr = AudioObjectPropertyAddress(
+                    mSelector: kAudioDevicePropertyDeviceIsAlive,
+                    mScope: kAudioObjectPropertyScopeGlobal,
+                    mElement: kAudioObjectPropertyElementMain)
+                let status = AudioObjectGetPropertyData(self.captureDeviceID, &addr, 0, nil, &aliveSize, &alive)
+                if status != noErr || alive == 0 {
+                    self.captureStarted = false
+                    self.onCaptureFailure?()
+                }
+            }
+        }
+        AudioObjectAddPropertyListenerBlock(inputDeviceID, &aliveAddr, .main, listener)
+        aliveListener = listener
+    }
+
+    var isRunning: Bool { captureStarted && playbackEngine.isRunning }
+
+    func start() throws {
+        playbackEngine.prepare()
+        try playbackEngine.start()
+        try startCapture()
+    }
+
+    private func startCapture() throws {
+        guard !captureStarted, let procID = captureProcID else { return }
+        let status = AudioDeviceStart(captureDeviceID, procID)
+        guard status == noErr else {
+            throw NSError(domain: "AudioService", code: Int(status),
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to start capture IO: \(status)"])
+        }
+        captureStarted = true
+    }
+
+    func pause() {
+        if captureStarted, let procID = captureProcID {
+            AudioDeviceStop(captureDeviceID, procID)
+            captureStarted = false
+        }
+        playbackEngine.pause()
+    }
+
+    func resume() throws {
+        if !playbackEngine.isRunning { try playbackEngine.start() }
+        try startCapture()
+    }
+
+    func stop() {
+        if let listener = aliveListener {
+            var aliveAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceIsAlive,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            AudioObjectRemovePropertyListenerBlock(captureDeviceID, &aliveAddr, .main, listener)
+            aliveListener = nil
+        }
+        if let procID = captureProcID {
+            if captureStarted { AudioDeviceStop(captureDeviceID, procID) }
+            AudioDeviceDestroyIOProcID(captureDeviceID, procID)
+            captureProcID = nil
+            captureStarted = false
+        }
+        playbackEngine.stop()
+    }
+}
+
 class AudioService {
-    private var engine: AVAudioEngine?
+    private var micProxy: ProxyEngine?
     private var playerNodes: [AVAudioPlayerNode] = []
+    private var injectMixer: AVAudioMixerNode?
+    private var micConfigObservers: [NSObjectProtocol] = []
+    private var speakerConfigObservers: [NSObjectProtocol] = []
     private(set) var proxyDeviceName: String?
+
+    /// Called on the main thread when an engine stops and cannot be restarted
+    /// (e.g. the underlying device was unplugged or its format changed fatally)
+    var onEngineFailure: ((String) -> Void)?
 
     /// Peak levels updated from input tap
     private(set) var micPeakLevel: Float = 0.0
@@ -52,9 +299,9 @@ class AudioService {
         Log.info("AudioService init")
     }
 
-    // MARK: - Proxy (AVAudioEngine)
+    // MARK: - Mic Proxy (real mic → ring → inject mix → PouetMicrophone)
 
-    var isProxyRunning: Bool { engine?.isRunning ?? false }
+    var isProxyRunning: Bool { micProxy?.isRunning ?? false }
 
     /// True when any player nodes are actively playing
     var isInjecting: Bool {
@@ -64,90 +311,95 @@ class AudioService {
     func startProxy(deviceID: AudioDeviceID, deviceName: String, inputChannels: Int, volume: Float = 1.0) throws {
         stopProxy()
 
-        let eng = AVAudioEngine()
-
-        // Set input device (real mic)
-        let inputNode = eng.inputNode
-        if let inputAU = inputNode.audioUnit {
-            var devID = deviceID
-            let status = AudioUnitSetProperty(
-                inputAU,
-                kAudioOutputUnitProperty_CurrentDevice,
-                kAudioUnitScope_Global, 0,
-                &devID,
-                UInt32(MemoryLayout<AudioDeviceID>.size)
-            )
-            if status != noErr {
-                throw NSError(domain: "AudioService", code: Int(status),
-                              userInfo: [NSLocalizedDescriptionKey: "Failed to set input device: \(status)"])
-            }
-        }
-
-        // Set output device (PouetMicrophone loopback)
         guard let loopbackID = findDeviceByUID("PouetMicrophone") else {
             throw NSError(domain: "AudioService", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: "PouetMicrophone loopback device not found"])
         }
-        let outputNode = eng.outputNode
-        if let outputAU = outputNode.audioUnit {
-            var devID = loopbackID
-            let status = AudioUnitSetProperty(
-                outputAU,
-                kAudioOutputUnitProperty_CurrentDevice,
-                kAudioUnitScope_Global, 0,
-                &devID,
-                UInt32(MemoryLayout<AudioDeviceID>.size)
-            )
-            if status != noErr {
-                throw NSError(domain: "AudioService", code: Int(status),
-                              userInfo: [NSLocalizedDescriptionKey: "Failed to set output device: \(status)"])
-            }
+
+        let proxy = try ProxyEngine(inputDeviceID: deviceID, outputDeviceID: loopbackID)
+        proxy.onCaptureSamples = { [weak self] samples, _ in
+            let peak = peakLevel(of: samples)
+            DispatchQueue.main.async { self?.micPeakLevel = peak }
+        }
+        proxy.onCaptureFailure = { [weak self] in
+            self?.onEngineFailure?("Mic capture device disappeared")
         }
 
-        // Install tap on input node for peak metering
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
-            self?.micPeakLevel = peakLevel(from: buffer)
-        }
+        // Injected sounds go through a dedicated submixer on the playback
+        // engine so the inject meter measures them in isolation from the mic.
+        let injectMix = AVAudioMixerNode()
+        proxy.playbackEngine.attach(injectMix)
+        proxy.playbackEngine.connect(injectMix, to: proxy.playbackEngine.mainMixerNode, format: nil)
+        injectMixer = injectMix
 
-        // Connect input → mixer → output (AVAudioEngine does this automatically)
-        // Just need to prepare and start
-        eng.prepare()
-        try eng.start()
+        try proxy.start()
 
-        engine = eng
+        micProxy = proxy
         proxyDeviceName = deviceName
         injectVolume = volume
+        micConfigObservers = observeConfigurationChanges(of: proxy, name: "Mic proxy")
         Log.info("Proxy started: \(deviceName) → PouetMicrophone")
     }
 
     func stopProxy() {
-        if let eng = engine {
-            eng.inputNode.removeTap(onBus: 0)
+        for observer in micConfigObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        micConfigObservers = []
+        if let proxy = micProxy {
+            removeInjectMeteringTap()
             for node in playerNodes {
                 node.stop()
-                eng.detach(node)
+                proxy.playbackEngine.detach(node)
             }
             playerNodes.removeAll()
-            eng.stop()
-            engine = nil
+            proxy.stop()
+            micProxy = nil
         }
+        injectMixer = nil
+        injectTapInstalled = false
         proxyDeviceName = nil
         micPeakLevel = 0.0
         injectPeakLevel = 0.0
     }
 
+    /// Restart a proxy's playback engine when its device changes configuration
+    /// (sample rate change, device unplugged). If restart fails, report upstream
+    /// so routing can be rolled back. The capture side is covered separately by
+    /// the proxy's device-alive listener.
+    private func observeConfigurationChanges(of proxy: ProxyEngine, name: String) -> [NSObjectProtocol] {
+        let engine = proxy.playbackEngine
+        let observer = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { [weak self, weak proxy, weak engine] _ in
+            guard let self, let proxy, let engine else { return }
+            guard proxy === self.micProxy || proxy === self.speakerProxy else { return }
+            guard !engine.isRunning else { return }
+            do {
+                try engine.start()
+                Log.info("\(name) engine restarted after configuration change")
+            } catch {
+                Log.error("\(name) engine failed to restart: \(error)")
+                self.onEngineFailure?("\(name) engine stopped and could not be restarted")
+            }
+        }
+        return [observer]
+    }
+
     // MARK: - Audio Injection
 
     func injectAudio(url: URL) throws {
-        guard let eng = engine, eng.isRunning else { return }
+        guard let proxy = micProxy, proxy.isRunning, let injectMix = injectMixer else { return }
+        let eng = proxy.playbackEngine
 
         let file = try AVAudioFile(forReading: url)
         let player = AVAudioPlayerNode()
         player.volume = injectVolume
 
         eng.attach(player)
-        eng.connect(player, to: eng.mainMixerNode, format: file.processingFormat)
+        eng.connect(player, to: injectMix, format: file.processingFormat)
 
         player.scheduleFile(file, at: nil) { [weak self, weak player, weak eng] in
             DispatchQueue.main.async {
@@ -180,10 +432,10 @@ class AudioService {
     }
 
     func stopInjection() {
-        guard let eng = engine else { return }
+        guard let proxy = micProxy else { return }
         for node in playerNodes {
             node.stop()
-            eng.detach(node)
+            proxy.playbackEngine.detach(node)
         }
         playerNodes.removeAll()
         injectPeakLevel = 0.0
@@ -195,8 +447,7 @@ class AudioService {
     private var injectTapInstalled = false
 
     private func updateInjectMeteringTap() {
-        guard let eng = engine else { return }
-        let mixer = eng.mainMixerNode
+        guard let mixer = injectMixer else { return }
         // Always remove existing tap before installing new one
         if injectTapInstalled {
             mixer.removeTap(onBus: 0)
@@ -206,18 +457,15 @@ class AudioService {
         guard format.sampleRate > 0, format.channelCount > 0 else { return }
 
         mixer.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            guard let self = self, !self.playerNodes.isEmpty else {
-                self?.injectPeakLevel = 0.0
-                return
-            }
-            self.injectPeakLevel = peakLevel(from: buffer)
+            let peak = peakLevel(from: buffer)
+            DispatchQueue.main.async { self?.injectPeakLevel = peak }
         }
         injectTapInstalled = true
     }
 
     private func removeInjectMeteringTap() {
-        guard injectTapInstalled, let eng = engine else { return }
-        eng.mainMixerNode.removeTap(onBus: 0)
+        guard injectTapInstalled, let mixer = injectMixer else { return }
+        mixer.removeTap(onBus: 0)
         injectTapInstalled = false
     }
 
@@ -387,11 +635,11 @@ class AudioService {
         findDeviceByUID("PouetSpeaker") != nil
     }
 
-    // MARK: - Speaker Proxy (AVAudioEngine: PouetSpeaker input → real speakers + rolling buffer)
+    // MARK: - Speaker Proxy (PouetSpeaker → ring → real speakers + rolling buffer)
 
-    private var speakerEngine: AVAudioEngine?
+    private var speakerProxy: ProxyEngine?
     private(set) var speakerProxyDeviceName: String?
-    private(set) var isSpeakerProxyRunning: Bool { get { speakerEngine?.isRunning ?? false } set {} }
+    var isSpeakerProxyRunning: Bool { speakerProxy?.isRunning ?? false }
     private(set) var speakerPeakLevel: Float = 0.0
 
     /// Rolling buffer for dashcam snapshots
@@ -410,83 +658,50 @@ class AudioService {
                           userInfo: [NSLocalizedDescriptionKey: "PouetSpeaker loopback device not found"])
         }
 
-        let eng = AVAudioEngine()
-
-        // Set input device to PouetSpeaker (reads looped-back system audio)
-        let inputNode = eng.inputNode
-        if let inputAU = inputNode.audioUnit {
-            var devID = speakerLoopbackID
-            let status = AudioUnitSetProperty(
-                inputAU,
-                kAudioOutputUnitProperty_CurrentDevice,
-                kAudioUnitScope_Global, 0,
-                &devID,
-                UInt32(MemoryLayout<AudioDeviceID>.size)
-            )
-            if status != noErr {
-                throw NSError(domain: "AudioService", code: Int(status),
-                              userInfo: [NSLocalizedDescriptionKey: "Failed to set speaker proxy input device: \(status)"])
-            }
-        }
-
-        // Set output device to real speakers (so user hears audio)
-        let outputNode = eng.outputNode
-        if let outputAU = outputNode.audioUnit {
-            var devID = deviceID
-            let status = AudioUnitSetProperty(
-                outputAU,
-                kAudioOutputUnitProperty_CurrentDevice,
-                kAudioUnitScope_Global, 0,
-                &devID,
-                UInt32(MemoryLayout<AudioDeviceID>.size)
-            )
-            if status != noErr {
-                throw NSError(domain: "AudioService", code: Int(status),
-                              userInfo: [NSLocalizedDescriptionKey: "Failed to set speaker proxy output device: \(status)"])
-            }
-        }
+        // PouetSpeaker input → ring → real speakers (monitoring path)
+        let proxy = try ProxyEngine(inputDeviceID: speakerLoopbackID, outputDeviceID: deviceID)
 
         // Set up rolling buffer
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-        dashcamSampleRate = inputFormat.sampleRate > 0 ? inputFormat.sampleRate : 48000
-        dashcamChannelCount = inputFormat.channelCount > 0 ? inputFormat.channelCount : 2
+        let inputFormat = proxy.captureFormat
+        dashcamSampleRate = inputFormat.sampleRate
+        dashcamChannelCount = inputFormat.channelCount
         dashcamBufferCapacity = Int(dashcamSampleRate * Double(dashcamChannelCount) * bufferDuration)
         dashcamBuffer = [Float](repeating: 0, count: dashcamBufferCapacity)
         dashcamWriteIndex = 0
 
-        // Tap on input to capture audio for dashcam + peak metering
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
+        // The capture hook also feeds the dashcam buffer + peak metering.
+        // Samples arrive interleaved, exactly the dashcam buffer's layout.
+        proxy.onCaptureSamples = { [weak self] samples, _ in
             guard let self = self else { return }
-            self.speakerPeakLevel = peakLevel(from: buffer)
+            let peak = peakLevel(of: samples)
+            DispatchQueue.main.async { self.speakerPeakLevel = peak }
 
-            // Write to rolling buffer
-            guard let channelData = buffer.floatChannelData else { return }
-            let frameLength = Int(buffer.frameLength)
-            let channels = Int(buffer.format.channelCount)
             self.dashcamLock.sync {
-                for i in 0..<frameLength {
-                    for ch in 0..<channels {
-                        self.dashcamBuffer[self.dashcamWriteIndex % self.dashcamBufferCapacity] = channelData[ch][i]
-                        self.dashcamWriteIndex += 1
-                    }
+                for value in samples {
+                    self.dashcamBuffer[self.dashcamWriteIndex % self.dashcamBufferCapacity] = value
+                    self.dashcamWriteIndex += 1
                 }
             }
         }
+        proxy.onCaptureFailure = { [weak self] in
+            self?.onEngineFailure?("Speaker capture device disappeared")
+        }
 
-        eng.prepare()
-        try eng.start()
+        try proxy.start()
 
-        speakerEngine = eng
+        speakerProxy = proxy
         speakerProxyDeviceName = deviceName
+        speakerConfigObservers = observeConfigurationChanges(of: proxy, name: "Speaker proxy")
         Log.info("Speaker proxy started: PouetSpeaker → \(deviceName)")
     }
 
     func stopSpeakerProxy() {
-        if let eng = speakerEngine {
-            eng.inputNode.removeTap(onBus: 0)
-            eng.stop()
-            speakerEngine = nil
+        for observer in speakerConfigObservers {
+            NotificationCenter.default.removeObserver(observer)
         }
+        speakerConfigObservers = []
+        speakerProxy?.stop()
+        speakerProxy = nil
         speakerProxyDeviceName = nil
         speakerPeakLevel = 0.0
         dashcamBuffer = []
@@ -494,7 +709,7 @@ class AudioService {
     }
 
     func saveDashcamSnapshot(to url: URL) throws {
-        guard speakerEngine?.isRunning == true else {
+        guard speakerProxy?.isRunning == true else {
             throw NSError(domain: "AudioService", code: -1,
                           userInfo: [NSLocalizedDescriptionKey: "Speaker proxy not running"])
         }
@@ -568,8 +783,8 @@ class AudioService {
 
     /// Pause audio engines for system sleep — prevents stale state on wake
     func pauseForSleep() {
-        engine?.pause()
-        speakerEngine?.pause()
+        micProxy?.pause()
+        speakerProxy?.pause()
         Log.info("Audio engines paused for sleep")
     }
 
@@ -577,12 +792,8 @@ class AudioService {
     @discardableResult
     func resumeAfterWake() -> Bool {
         do {
-            if let eng = engine, !eng.isRunning {
-                try eng.start()
-            }
-            if let eng = speakerEngine, !eng.isRunning {
-                try eng.start()
-            }
+            try micProxy?.resume()
+            try speakerProxy?.resume()
             Log.info("Audio engines resumed after wake")
             return true
         } catch {
@@ -616,5 +827,5 @@ private func getAudioDeviceStringProperty(_ devID: AudioDeviceID, selector: Audi
     var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
     guard AudioObjectGetPropertyData(devID, &addr, 0, nil, &size, &value) == noErr,
           let value else { return nil }
-    return value.takeUnretainedValue() as String
+    return value.takeRetainedValue() as String
 }

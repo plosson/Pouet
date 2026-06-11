@@ -99,6 +99,45 @@ private func generateAudioFile(url: URL, durationSeconds: Double, sampleRate: Do
     try file.write(from: buffer)
 }
 
+/// Decode a file's audio track and return the peak amplitude within the first
+/// and last `window` seconds — used to verify tail alignment of muxed audio.
+private func audioHeadTailPeaks(url: URL, window: Double) async throws -> (head: Float, tail: Float) {
+    let asset = AVURLAsset(url: url)
+    let duration = CMTimeGetSeconds(try await asset.load(.duration))
+    guard let track = try await asset.load(.tracks).first(where: { $0.mediaType == .audio }) else {
+        throw NSError(domain: "test", code: -1, userInfo: [NSLocalizedDescriptionKey: "no audio track"])
+    }
+    let reader = try AVAssetReader(asset: asset)
+    let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+        AVFormatIDKey: kAudioFormatLinearPCM,
+        AVLinearPCMBitDepthKey: 32,
+        AVLinearPCMIsFloatKey: true,
+        AVLinearPCMIsNonInterleaved: false,
+    ])
+    reader.add(output)
+    reader.startReading()
+
+    var headPeak: Float = 0
+    var tailPeak: Float = 0
+    while let sb = output.copyNextSampleBuffer() {
+        guard let bb = CMSampleBufferGetDataBuffer(sb) else { continue }
+        let pts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sb))
+        var length = 0
+        var dataPointer: UnsafeMutablePointer<CChar>?
+        CMBlockBufferGetDataPointer(bb, atOffset: 0, lengthAtOffsetOut: nil,
+                                    totalLengthOut: &length, dataPointerOut: &dataPointer)
+        guard let dataPointer else { continue }
+        let count = length / MemoryLayout<Float>.size
+        var peak: Float = 0
+        UnsafeRawPointer(dataPointer).withMemoryRebound(to: Float.self, capacity: count) { floats in
+            for i in 0..<count { peak = max(peak, abs(floats[i])) }
+        }
+        if pts < window { headPeak = max(headPeak, peak) }
+        if pts > duration - window { tailPeak = max(tailPeak, peak) }
+    }
+    return (headPeak, tailPeak)
+}
+
 /// Load track info from a file.
 private func loadTrackInfo(url: URL) async throws -> (hasVideo: Bool, hasAudio: Bool, duration: Double) {
     let asset = AVURLAsset(url: url)
@@ -194,6 +233,11 @@ struct MuxTests {
             try assert(info.hasAudio, "output should have audio track")
             // Audio track should be ~1s, video track ~3s, overall duration = video duration
             try assert(info.duration > 2.5, "video duration should be preserved: \(info.duration)")
+            // Both buffers end at the snapshot moment → 1s audio belongs at the
+            // END of the 3s video (tail-aligned), not the start
+            let peaks = try await audioHeadTailPeaks(url: outputURL, window: 1.0)
+            try assert(peaks.head < 0.05, "head should be silent (tail-aligned), got \(peaks.head)")
+            try assert(peaks.tail > 0.1, "tail should contain the audio, got \(peaks.tail)")
         }
 
         // Test 5: Empty segments list should fail

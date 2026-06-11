@@ -49,6 +49,12 @@ class HotkeyService {
     init() {}
 
     func start() {
+        // Idempotent: a second start() must not leak monitors (doubled monitors
+        // turn every single tap into a double tap)
+        if globalMonitor != nil || localMonitor != nil {
+            stop()
+        }
+
         // Global monitor: fires when another app is active (cannot consume events)
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleEvent(event)
@@ -96,9 +102,18 @@ class HotkeyService {
                 self?.onVideoSnapshot?()
             }
         } else {
-            // First tap — wait for possible second tap
+            // First tap — wait for possible second tap.
+            // If a previous tap's timer is still pending (main thread was busy
+            // past the double-tap window), fire its audio snapshot now instead
+            // of silently dropping it.
+            if pendingAudioTimer != nil {
+                pendingAudioTimer?.cancel()
+                pendingAudioTimer = nil
+                DispatchQueue.main.async { [weak self] in
+                    self?.onAudioSnapshot?()
+                }
+            }
             lastTapTime = now
-            pendingAudioTimer?.cancel()
             let timer = DispatchWorkItem { [weak self] in
                 self?.lastTapTime = nil
                 DispatchQueue.main.async {

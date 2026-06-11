@@ -37,6 +37,15 @@ struct RoutingCoordinator {
             currentOutputUID: audio.defaultDeviceUID(input: false),
             virtualUIDFragments: virtualUIDFragments
         )
+        // After a crash the current default may still be a Pouet virtual device
+        // (sanitized to nil). Keep the UID crash recovery preserved for the
+        // unplugged original device instead of wiping it.
+        if state.savedInputUID == nil {
+            state.savedInputUID = persistence.savedInputDefaultUID
+        }
+        if state.savedOutputUID == nil {
+            state.savedOutputUID = persistence.savedOutputDefaultUID
+        }
         persistence.savedInputDefaultUID = state.savedInputUID
         persistence.savedOutputDefaultUID = state.savedOutputUID
     }

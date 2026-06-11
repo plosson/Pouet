@@ -4,6 +4,7 @@
 
 import Foundation
 import AVFoundation
+import AppKit
 import Combine
 
 // MARK: - Recording Item (unified audio + video)
@@ -46,8 +47,12 @@ struct AppConfig: Codable {
     }
 
     func save() {
-        if let data = try? JSONEncoder().encode(self) {
-            try? data.write(to: URL(fileURLWithPath: AppConfig.defaultPath))
+        do {
+            let data = try JSONEncoder().encode(self)
+            try data.write(to: URL(fileURLWithPath: AppConfig.defaultPath))
+        } catch {
+            // Crash recovery depends on this file — losing it must at least be visible
+            Log.error("Failed to save config: \(error)")
         }
     }
 }
@@ -81,6 +86,9 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var outputDevices: [AudioDeviceInfo] = []
     @Published var dashcamBufferSeconds: Double = 5.0
     @Published var speakerPeakLevel: Float = 0.0
+    @Published var hotkeyKeyCode: UInt16 = 38
+
+    var hotkeyDisplayName: String { HotkeyService.displayName(for: hotkeyKeyCode) }
     @Published var recentSnapshots: [URL] = []
     @Published var previewingURL: URL?
     @Published var allRecordings: [RecordingItem] = []
@@ -98,6 +106,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var routingCoordinator = RoutingCoordinator()
     private var didShutdown = false
     private let sleepWakeMonitor = SleepWakeMonitor()
+    private var terminateObserver: NSObjectProtocol?
 
     // MARK: - Init
 
@@ -106,7 +115,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         self.config = AppConfig.load()
         self.baseDir = config.baseDir
         self.volume = config.injectVolume ?? 1.0
-        self.dashcamBufferSeconds = config.dashcamBufferSeconds ?? 5.0
+        self.dashcamBufferSeconds = min(30, max(1, config.dashcamBufferSeconds ?? 5.0))
         super.init()
 
         // Video buffer matches dashcam duration (audio comes from AudioService)
@@ -116,6 +125,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         // Hotkey config
         if let kc = config.hotkeyKeyCode {
             hotkey.keyCode = kc
+            hotkeyKeyCode = kc
         }
 
         // Ensure directories exist
@@ -148,6 +158,10 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         beginRoutingSession()
         config.save()
 
+        audio.onEngineFailure = { [weak self] reason in
+            self?.handleRuntimeRoutingFailure(reason: reason)
+        }
+
         // Auto-start proxies: saved device or system default
         let micName = config.selectedDevice
             ?? audio.defaultDevice(input: true)?.name
@@ -165,6 +179,16 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
         startPolling()
         startHotkeys()
+
+        // Guarantee routing restore on quit even if the window never appeared
+        // (the AppDelegate hook is only wired on the window's first onAppear)
+        if terminateObserver == nil {
+            terminateObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                self?.shutdown()
+            }
+        }
 
         sleepWakeMonitor.start(
             onSleep: { [weak self] in
@@ -292,6 +316,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     func setHotkeyKey(_ keyCode: UInt16) {
         hotkey.stop()
         hotkey.keyCode = keyCode
+        hotkeyKeyCode = keyCode
         config.hotkeyKeyCode = keyCode
         config.save()
         hotkey.start()
@@ -305,7 +330,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         }
 
         let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss-SSS"
         let filename = "pouet-audio-\(formatter.string(from: Date())).m4a"
         let url = URL(fileURLWithPath: (audioSnapshotsDir as NSString).appendingPathComponent(filename))
 
@@ -626,9 +651,5 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private func applyPersistenceState(_ persistence: RoutingPersistenceState) {
         config.savedInputDefaultUID = persistence.savedInputDefaultUID
         config.savedOutputDefaultUID = persistence.savedOutputDefaultUID
-    }
-
-    deinit {
-        shutdown()
     }
 }

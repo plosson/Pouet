@@ -14,6 +14,7 @@
 #   make uninstall        # remove driver
 #   make test             # run unit tests
 #   make test-integration # run integration tests (requires installed driver)
+#   make test-e2e         # end-to-end audio path tests (requires installed driver + mic permission)
 #   make clean
 
 BUNDLE_ID     = com.pouet.driver
@@ -28,6 +29,8 @@ DRIVER_PLIST  = Driver/Pouet.driver/Contents/Info.plist
 GUI_BUNDLE    = build/Pouet.app
 GUI_BINARY    = $(GUI_BUNDLE)/Contents/MacOS/Pouet
 GUI_BUNDLE_ID = com.pouet.gui
+SWIFT_SOURCES := $(shell find Sources -name '*.swift')
+APP_ASSETS    := App/Info.plist App/entitlements.plist App/AppIcon.icns $(wildcard App/Resources/*)
 
 UNINSTALLER   = build/UninstallPouet.app
 
@@ -51,7 +54,7 @@ CFLAGS        = -arch arm64 -arch x86_64 \
                 -framework Accelerate
 
 # ============================================================
-.PHONY: all run driver gui uninstaller sign pkg install uninstall clean test test-integration test-mux test-routing test-routing-coordinator test-install-scripts test-platform-targets
+.PHONY: all run driver gui uninstaller sign pkg install uninstall clean test test-integration test-e2e test-loopback test-mux test-routing test-routing-coordinator test-install-scripts test-platform-targets
 
 all: driver gui uninstaller
 
@@ -61,7 +64,7 @@ run: gui
 # ---- Driver bundle (C, built with clang) ----
 driver: $(DRIVER_BINARY)
 
-$(DRIVER_BINARY): $(DRIVER_SRC) $(DRIVER_PLIST)
+$(DRIVER_BINARY): $(DRIVER_SRC) $(DRIVER_PLIST) Driver/exports.lds
 	@mkdir -p $(DRIVER_BUNDLE)/Contents/MacOS
 	@mkdir -p $(DRIVER_BUNDLE)/Contents/Resources
 	$(CC) $(CFLAGS) \
@@ -78,7 +81,7 @@ $(DRIVER_BINARY): $(DRIVER_SRC) $(DRIVER_PLIST)
 # ---- GUI app (Swift, built with SPM) ----
 gui: $(GUI_BINARY)
 
-$(GUI_BINARY): Package.swift $(DRIVER_BINARY)
+$(GUI_BINARY): Package.swift $(SWIFT_SOURCES) $(APP_ASSETS) $(DRIVER_BINARY)
 	@killall Pouet 2>/dev/null && sleep 0.5 || true
 	swift build -c release
 	@mkdir -p $(GUI_BUNDLE)/Contents/MacOS
@@ -90,8 +93,14 @@ $(GUI_BINARY): Package.swift $(DRIVER_BINARY)
 	@cp App/AppIcon.icns $(GUI_BUNDLE)/Contents/Resources/AppIcon.icns
 	@cp App/Resources/* $(GUI_BUNDLE)/Contents/Resources/
 	@cp -R $(DRIVER_BUNDLE) $(GUI_BUNDLE)/Contents/Resources/Pouet.driver
-	codesign --force --options runtime --sign "$(DEVID)" --identifier $(BUNDLE_ID) --timestamp $(GUI_BUNDLE)/Contents/Resources/Pouet.driver
-	codesign --force --options runtime --sign "$(DEVID)" --entitlements App/entitlements.plist --timestamp $(GUI_BUNDLE)
+	@if security find-identity -v -p codesigning 2>/dev/null | grep -q "$(DEVID)"; then \
+	    codesign --force --options runtime --sign "$(DEVID)" --identifier $(BUNDLE_ID) --timestamp $(GUI_BUNDLE)/Contents/Resources/Pouet.driver; \
+	    codesign --force --options runtime --sign "$(DEVID)" --entitlements App/entitlements.plist --timestamp $(GUI_BUNDLE); \
+	else \
+	    echo "⚠ Developer ID not found — ad-hoc signing (local use only)"; \
+	    codesign --force --sign - --identifier $(BUNDLE_ID) $(GUI_BUNDLE)/Contents/Resources/Pouet.driver; \
+	    codesign --force --sign - --entitlements App/entitlements.plist $(GUI_BUNDLE); \
+	fi
 	@echo "✓ GUI app built → $(GUI_BUNDLE)"
 
 # ---- Uninstaller app ----
@@ -103,6 +112,8 @@ $(UNINSTALLER): Uninstaller/uninstall.sh Uninstaller/Info.plist
 	@cp Uninstaller/uninstall.sh "$(UNINSTALLER)/Contents/MacOS/uninstall.sh"
 	@chmod +x "$(UNINSTALLER)/Contents/MacOS/uninstall.sh"
 	@cp Uninstaller/Info.plist "$(UNINSTALLER)/Contents/Info.plist"
+	@/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" "$(UNINSTALLER)/Contents/Info.plist"
+	@/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(VERSION)" "$(UNINSTALLER)/Contents/Info.plist"
 	@cp App/UninstallIcon.icns "$(UNINSTALLER)/Contents/Resources/AppIcon.icns"
 	@echo "✓ Uninstaller built → $(UNINSTALLER)"
 
@@ -147,7 +158,7 @@ pkg: sign
 	    --version $(VERSION) \
 	    --scripts Installer/scripts \
 	    build/Pouet_component.pkg
-	@sed 's/version="1.0.0"/version="$(VERSION)"/' Installer/distribution.xml > build/distribution.xml
+	@sed -E 's/^([[:space:]]+version=")[0-9][^"]*/\1$(VERSION)/' Installer/distribution.xml > build/distribution.xml
 	productbuild \
 	    --distribution build/distribution.xml \
 	    --package-path build \
@@ -183,6 +194,21 @@ test-integration: Tests/test_integration.c
 	    Tests/test_integration.c
 	@echo "--- Integration tests (requires installed driver) ---"
 	./build/test_integration
+
+# End-to-end audio path tests: drive real audio through the installed driver
+# and the app's AVAudioEngine proxies, using the virtual devices as stand-ins
+# for hardware. Requires `make install` first + mic permission for the terminal.
+test-e2e: Tests/test_e2e_audio.swift Sources/Pouet/Services/AudioService.swift Sources/Pouet/Services/Log.swift Sources/Pouet/Services/RoutingCoordinator.swift Sources/Pouet/Services/RoutingSafety.swift
+	@mkdir -p build
+	swiftc -O \
+	    -o build/test_e2e_audio \
+	    Tests/test_e2e_audio.swift \
+	    Sources/Pouet/Services/AudioService.swift \
+	    Sources/Pouet/Services/Log.swift \
+	    Sources/Pouet/Services/RoutingCoordinator.swift \
+	    Sources/Pouet/Services/RoutingSafety.swift
+	@echo "--- End-to-end audio tests (requires installed driver + mic permission) ---"
+	./build/test_e2e_audio
 
 test-loopback: Tests/test_loopback.c $(DRIVER_SRC)
 	@mkdir -p build

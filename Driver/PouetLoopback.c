@@ -122,6 +122,15 @@ enum
     kObjectID_Pitch_Adjust              = 10,
     kObjectID_ClockSource               = 11,
     kObjectID_Device2                   = 12,
+    //	Device2 has its own stream and control objects so its state (volume,
+    //	mute, stream activity) is independent from Device1's — muting the
+    //	speaker device must not mute the microphone device.
+    kObjectID_Stream_Input2             = 13,
+    kObjectID_Volume_Input_Master2      = 14,
+    kObjectID_Mute_Input_Master2       = 15,
+    kObjectID_Stream_Output2            = 16,
+    kObjectID_Volume_Output_Master2     = 17,
+    kObjectID_Mute_Output_Master2      = 18,
 };
 
 enum
@@ -278,12 +287,16 @@ static UInt64                       gDevice_AnchorHostTime              = 0;
 
 static bool                         gStream_Input_IsActive              = true;
 static bool                         gStream_Output_IsActive             = true;
+static bool                         gStream_Input2_IsActive             = true;
+static bool                         gStream_Output2_IsActive            = true;
 
 static const Float32                kVolume_MinDB                       = -64.0;
 static const Float32                kVolume_MaxDB                       = 0.0;
 static Float32                      gVolume_Master_Value                = 1.0;
+static Float32                      gVolume2_Master_Value               = 1.0;
 static Float32                      gPitch_Adjust                       = 0.5;
 static bool                         gMute_Master_Value                  = false;
+static bool                         gMute2_Master_Value                 = false;
 static UInt32                       kClockSource_NumberItems            = 2;
 #define                             kClockSource_InternalFixed         "Internal Fixed"
 #define                             kClockSource_InternalAdjustable    "Internal Adjustable"
@@ -307,19 +320,55 @@ static struct ObjectInfo            kDevice_ObjectList[]                = {
 
 static struct ObjectInfo            kDevice2_ObjectList[]                = {
 #if kDevice2_HasInput
-    { kObjectID_Stream_Input,           kObjectType_Stream,     kAudioObjectPropertyScopeInput  },
-    { kObjectID_Volume_Input_Master,    kObjectType_Control,    kAudioObjectPropertyScopeInput  },
-    { kObjectID_Mute_Input_Master,      kObjectType_Control,    kAudioObjectPropertyScopeInput  },
+    { kObjectID_Stream_Input2,          kObjectType_Stream,     kAudioObjectPropertyScopeInput  },
+    { kObjectID_Volume_Input_Master2,   kObjectType_Control,    kAudioObjectPropertyScopeInput  },
+    { kObjectID_Mute_Input_Master2,     kObjectType_Control,    kAudioObjectPropertyScopeInput  },
 #endif
 #if kDevice2_HasOutput
-    { kObjectID_Stream_Output,          kObjectType_Stream,     kAudioObjectPropertyScopeOutput },
-    { kObjectID_Volume_Output_Master,   kObjectType_Control,    kAudioObjectPropertyScopeOutput },
-    { kObjectID_Mute_Output_Master,     kObjectType_Control,    kAudioObjectPropertyScopeOutput },
+    { kObjectID_Stream_Output2,         kObjectType_Stream,     kAudioObjectPropertyScopeOutput },
+    { kObjectID_Volume_Output_Master2,  kObjectType_Control,    kAudioObjectPropertyScopeOutput },
+    { kObjectID_Mute_Output_Master2,    kObjectType_Control,    kAudioObjectPropertyScopeOutput },
 #endif
 };
 
 static const UInt32                 kDevice_ObjectListSize              = sizeof(kDevice_ObjectList) / sizeof(struct ObjectInfo);
 static const UInt32                 kDevice2_ObjectListSize              = sizeof(kDevice2_ObjectList) / sizeof(struct ObjectInfo);
+
+//	Helpers to map an object ID to its device and per-device state.
+static bool is_device2_object_id(AudioObjectID inObjectID) {
+    return inObjectID >= kObjectID_Stream_Input2 && inObjectID <= kObjectID_Mute_Output_Master2;
+}
+
+static bool is_input_stream_id(AudioObjectID inObjectID) {
+    return inObjectID == kObjectID_Stream_Input || inObjectID == kObjectID_Stream_Input2;
+}
+
+static bool is_stream_id(AudioObjectID inObjectID) {
+    return inObjectID == kObjectID_Stream_Input || inObjectID == kObjectID_Stream_Output ||
+           inObjectID == kObjectID_Stream_Input2 || inObjectID == kObjectID_Stream_Output2;
+}
+
+static bool is_input_scoped_control_id(AudioObjectID inObjectID) {
+    return inObjectID == kObjectID_Volume_Input_Master || inObjectID == kObjectID_Mute_Input_Master ||
+           inObjectID == kObjectID_Volume_Input_Master2 || inObjectID == kObjectID_Mute_Input_Master2;
+}
+
+static Float32* volume_value_for(AudioObjectID inObjectID) {
+    return is_device2_object_id(inObjectID) ? &gVolume2_Master_Value : &gVolume_Master_Value;
+}
+
+static bool* mute_value_for(AudioObjectID inObjectID) {
+    return is_device2_object_id(inObjectID) ? &gMute2_Master_Value : &gMute_Master_Value;
+}
+
+static bool* stream_active_value_for(AudioObjectID inObjectID) {
+    switch (inObjectID) {
+        case kObjectID_Stream_Input:    return &gStream_Input_IsActive;
+        case kObjectID_Stream_Output:   return &gStream_Output_IsActive;
+        case kObjectID_Stream_Input2:   return &gStream_Input2_IsActive;
+        default:                        return &gStream_Output2_IsActive;
+    }
+}
 
 #ifndef kSampleRates
 #define                             kSampleRates       8000, 16000, 24000, 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600, 768000
@@ -557,37 +606,47 @@ static UInt32 device_stream_list_size(AudioObjectPropertyScope scope, AudioObjec
 
 }
 
+//	A control is visible when it matches the requested scope and, for the pitch
+//	control, only when pitch adjustment is enabled. The size and fill paths MUST
+//	share this predicate: if the size counts an entry the fill skips, the fill
+//	loop walks past the end of the object list.
+static bool device_control_is_visible(const struct ObjectInfo* info, AudioObjectPropertyScope scope) {
+    if (info->type != kObjectType_Control) return false;
+    if (info->scope != scope && scope != kAudioObjectPropertyScopeGlobal) return false;
+    if (!gPitch_Adjust_Enabled && info->id == kObjectID_Pitch_Adjust) return false;
+    return true;
+}
+
+static UInt32 device_control_list_count(const struct ObjectInfo* list, UInt32 listSize, AudioObjectPropertyScope scope) {
+    UInt32 count = 0;
+    for (UInt32 i = 0; i < listSize; i++)
+    {
+        count += device_control_is_visible(&list[i], scope);
+    }
+    return count;
+}
+
+static UInt32 device_control_list_fill(const struct ObjectInfo* list, UInt32 listSize, AudioObjectPropertyScope scope, AudioObjectID* outIDs, UInt32 maxItems) {
+    UInt32 k = 0;
+    for (UInt32 i = 0; i < listSize && k < maxItems; i++)
+    {
+        if (device_control_is_visible(&list[i], scope))
+        {
+            outIDs[k++] = list[i].id;
+        }
+    }
+    return k;
+}
+
 static UInt32 device_control_list_size(AudioObjectPropertyScope scope, AudioObjectID objectID) {
-    
+
     switch (objectID) {
         case kObjectID_Device:
-        {
-            
-            UInt32 count = 0;
-            for (UInt32 i = 0; i < kDevice_ObjectListSize; i++)
-            {
-                count += (kDevice_ObjectList[i].type == kObjectType_Control && (kDevice_ObjectList[i].scope == scope || scope == kAudioObjectPropertyScopeGlobal));
-            }
-
-            return count;
-        }
-            break;
+            return device_control_list_count(kDevice_ObjectList, kDevice_ObjectListSize, scope);
         case kObjectID_Device2:
-        {
-            
-            UInt32 count = 0;
-            for (UInt32 i = 0; i < kDevice2_ObjectListSize; i++)
-            {
-                count += (kDevice2_ObjectList[i].type == kObjectType_Control && (kDevice2_ObjectList[i].scope == scope || scope == kAudioObjectPropertyScopeGlobal));
-            }
-
-            return count;
-        }
-            break;
-            
+            return device_control_list_count(kDevice2_ObjectList, kDevice2_ObjectListSize, scope);
         default:
             return 0;
-            break;
     }
 
 }
@@ -764,7 +823,7 @@ static OSStatus	PouetLoopback_Initialize(AudioServerPlugInDriverRef inDriver, Au
 	}
 	
 	//	initialize the box name from the settings
-	gPlugIn_Host->CopyFromStorage(gPlugIn_Host, CFSTR("box acquired"), &theSettingsData);
+	gPlugIn_Host->CopyFromStorage(gPlugIn_Host, CFSTR("box name"), &theSettingsData);
 	if(theSettingsData != NULL)
 	{
 		if(CFGetTypeID(theSettingsData) == CFStringGetTypeID())
@@ -924,12 +983,15 @@ static OSStatus	PouetLoopback_PerformDeviceConfigurationChange(AudioServerPlugIn
             pthread_mutex_unlock(&gPlugIn_StateMutex);
             FailWithAction(!is_valid_sample_rate(newSampleRate), theAnswer = kAudioHardwareBadObjectError, Done, "PouetLoopback_PerformDeviceConfigurationChange: bad sample rate");
             
-            //	lock the state mutex
+            //	lock the state mutex, and the IO mutex too: the HAL only stops IO
+            //	on the device this Perform call is for, while the tick values are
+            //	shared with the other device's GetZeroTimeStamp
             pthread_mutex_lock(&gPlugIn_StateMutex);
-            
+            pthread_mutex_lock(&gDevice_IOMutex);
+
             //	change the sample rate
             gDevice_SampleRate = newSampleRate;
-            
+
             //	recalculate the state that depends on the sample rate
             struct mach_timebase_info theTimeBaseInfo;
             mach_timebase_info(&theTimeBaseInfo);
@@ -937,8 +999,9 @@ static OSStatus	PouetLoopback_PerformDeviceConfigurationChange(AudioServerPlugIn
             theHostClockFrequency *= 1000000000.0;
             gDevice_HostTicksPerFrame = theHostClockFrequency / gDevice_SampleRate;
             gDevice_AdjustedTicksPerFrame = gDevice_HostTicksPerFrame - gDevice_HostTicksPerFrame/100.0 * 2.0*(gPitch_Adjust - 0.5);
-            
-            //	unlock the state mutex
+
+            //	unlock the mutexes
+            pthread_mutex_unlock(&gDevice_IOMutex);
             pthread_mutex_unlock(&gPlugIn_StateMutex);
             
             // DebugMsg("BlackHole theTimeBaseInfo.numer: %u \t theTimeBaseInfo.denom: %u", theTimeBaseInfo.numer, theTimeBaseInfo.denom);
@@ -1002,6 +1065,8 @@ static Boolean	PouetLoopback_HasProperty(AudioServerPlugInDriverRef inDriver, Au
 		
 		case kObjectID_Stream_Input:
 		case kObjectID_Stream_Output:
+		case kObjectID_Stream_Input2:
+		case kObjectID_Stream_Output2:
 			theAnswer = PouetLoopback_HasStreamProperty(inDriver, inObjectID, inClientProcessID, inAddress);
 			break;
 		
@@ -1009,6 +1074,10 @@ static Boolean	PouetLoopback_HasProperty(AudioServerPlugInDriverRef inDriver, Au
 		case kObjectID_Mute_Output_Master:
 		case kObjectID_Volume_Input_Master:
 		case kObjectID_Mute_Input_Master:
+		case kObjectID_Volume_Output_Master2:
+		case kObjectID_Mute_Output_Master2:
+		case kObjectID_Volume_Input_Master2:
+		case kObjectID_Mute_Input_Master2:
 		case kObjectID_Pitch_Adjust:
         case kObjectID_ClockSource:
 			theAnswer = PouetLoopback_HasControlProperty(inDriver, inObjectID, inClientProcessID, inAddress);
@@ -1052,6 +1121,8 @@ static OSStatus	PouetLoopback_IsPropertySettable(AudioServerPlugInDriverRef inDr
 		
 		case kObjectID_Stream_Input:
 		case kObjectID_Stream_Output:
+		case kObjectID_Stream_Input2:
+		case kObjectID_Stream_Output2:
 			theAnswer = PouetLoopback_IsStreamPropertySettable(inDriver, inObjectID, inClientProcessID, inAddress, outIsSettable);
 			break;
 
@@ -1059,6 +1130,10 @@ static OSStatus	PouetLoopback_IsPropertySettable(AudioServerPlugInDriverRef inDr
 		case kObjectID_Mute_Output_Master:
 		case kObjectID_Volume_Input_Master:
 		case kObjectID_Mute_Input_Master:
+		case kObjectID_Volume_Output_Master2:
+		case kObjectID_Mute_Output_Master2:
+		case kObjectID_Volume_Input_Master2:
+		case kObjectID_Mute_Input_Master2:
 		case kObjectID_Pitch_Adjust:
         case kObjectID_ClockSource:
 			theAnswer = PouetLoopback_IsControlPropertySettable(inDriver, inObjectID, inClientProcessID, inAddress, outIsSettable);
@@ -1105,6 +1180,8 @@ static OSStatus	PouetLoopback_GetPropertyDataSize(AudioServerPlugInDriverRef inD
 		
 		case kObjectID_Stream_Input:
 		case kObjectID_Stream_Output:
+		case kObjectID_Stream_Input2:
+		case kObjectID_Stream_Output2:
 			theAnswer = PouetLoopback_GetStreamPropertyDataSize(inDriver, inObjectID, inClientProcessID, inAddress, inQualifierDataSize, inQualifierData, outDataSize);
 			break;
 			
@@ -1112,6 +1189,10 @@ static OSStatus	PouetLoopback_GetPropertyDataSize(AudioServerPlugInDriverRef inD
 		case kObjectID_Mute_Output_Master:
 		case kObjectID_Volume_Input_Master:
 		case kObjectID_Mute_Input_Master:
+		case kObjectID_Volume_Output_Master2:
+		case kObjectID_Mute_Output_Master2:
+		case kObjectID_Volume_Input_Master2:
+		case kObjectID_Mute_Input_Master2:
 		case kObjectID_Pitch_Adjust:
         case kObjectID_ClockSource:
 			theAnswer = PouetLoopback_GetControlPropertyDataSize(inDriver, inObjectID, inClientProcessID, inAddress, inQualifierDataSize, inQualifierData, outDataSize);
@@ -1159,6 +1240,8 @@ static OSStatus	PouetLoopback_GetPropertyData(AudioServerPlugInDriverRef inDrive
 		
 		case kObjectID_Stream_Input:
 		case kObjectID_Stream_Output:
+		case kObjectID_Stream_Input2:
+		case kObjectID_Stream_Output2:
 			theAnswer = PouetLoopback_GetStreamPropertyData(inDriver, inObjectID, inClientProcessID, inAddress, inQualifierDataSize, inQualifierData, inDataSize, outDataSize, outData);
 			break;
 		
@@ -1166,6 +1249,10 @@ static OSStatus	PouetLoopback_GetPropertyData(AudioServerPlugInDriverRef inDrive
 		case kObjectID_Mute_Output_Master:
 		case kObjectID_Volume_Input_Master:
 		case kObjectID_Mute_Input_Master:
+		case kObjectID_Volume_Output_Master2:
+		case kObjectID_Mute_Output_Master2:
+		case kObjectID_Volume_Input_Master2:
+		case kObjectID_Mute_Input_Master2:
 		case kObjectID_Pitch_Adjust:
         case kObjectID_ClockSource:
 			theAnswer = PouetLoopback_GetControlPropertyData(inDriver, inObjectID, inClientProcessID, inAddress, inQualifierDataSize, inQualifierData, inDataSize, outDataSize, outData);
@@ -1211,6 +1298,8 @@ static OSStatus	PouetLoopback_SetPropertyData(AudioServerPlugInDriverRef inDrive
 		
 		case kObjectID_Stream_Input:
 		case kObjectID_Stream_Output:
+		case kObjectID_Stream_Input2:
+		case kObjectID_Stream_Output2:
 			theAnswer = PouetLoopback_SetStreamPropertyData(inDriver, inObjectID, inClientProcessID, inAddress, inQualifierDataSize, inQualifierData, inDataSize, inData, &theNumberPropertiesChanged, theChangedAddresses);
 			break;
 			
@@ -1218,6 +1307,10 @@ static OSStatus	PouetLoopback_SetPropertyData(AudioServerPlugInDriverRef inDrive
 		case kObjectID_Mute_Output_Master:
 		case kObjectID_Volume_Input_Master:
 		case kObjectID_Mute_Input_Master:
+		case kObjectID_Volume_Output_Master2:
+		case kObjectID_Mute_Output_Master2:
+		case kObjectID_Volume_Input_Master2:
+		case kObjectID_Mute_Input_Master2:
 		case kObjectID_Pitch_Adjust:
         case kObjectID_ClockSource:
 			theAnswer = PouetLoopback_SetControlPropertyData(inDriver, inObjectID, inClientProcessID, inAddress, inQualifierDataSize, inQualifierData, inDataSize, inData, &theNumberPropertiesChanged, theChangedAddresses);
@@ -1360,7 +1453,8 @@ static OSStatus	PouetLoopback_GetPlugInPropertyDataSize(AudioServerPlugInDriverR
 		case kAudioObjectPropertyOwnedObjects:
 			if(gBox_Acquired)
 			{
-				*outDataSize = 2 * sizeof(AudioClassID);
+				//	the box and both devices
+				*outDataSize = 3 * sizeof(AudioClassID);
 			}
 			else
 			{
@@ -1459,24 +1553,22 @@ static OSStatus	PouetLoopback_GetPlugInPropertyData(AudioServerPlugInDriverRef i
 			//	number is allowed to be smaller than the actual size of the list. In such
 			//	case, only that number of items will be returned
 			theNumberItemsToFetch = inDataSize / sizeof(AudioObjectID);
-			
-			//	Clamp that to the number of boxes this driver implements (which is just 1)
-			if(theNumberItemsToFetch > (gBox_Acquired ? 2 : 1))
+
+			//	Clamp to what the plug-in owns: the box, plus both devices when acquired
+			if(theNumberItemsToFetch > (gBox_Acquired ? 3 : 1))
 			{
-				theNumberItemsToFetch = (gBox_Acquired ? 2 : 1);
+				theNumberItemsToFetch = (gBox_Acquired ? 3 : 1);
 			}
-			
-			//	Write the devices' object IDs into the return value
-				if(theNumberItemsToFetch > 1)
+
+			//	Write the owned object IDs into the return value
+			{
+				AudioObjectID theOwnedObjects[3] = { kObjectID_Box, kObjectID_Device, kObjectID_Device2 };
+				for(UInt32 i = 0; i < theNumberItemsToFetch; i++)
 				{
-					((AudioObjectID*)outData)[0] = kObjectID_Box;
-					((AudioObjectID*)outData)[1] = kObjectID_Device;
+					((AudioObjectID*)outData)[i] = theOwnedObjects[i];
 				}
-			else if(theNumberItemsToFetch > 0)
-			{
-				((AudioObjectID*)outData)[0] = kObjectID_Box;
 			}
-			
+
 			//	Return how many bytes we wrote to
 			*outDataSize = theNumberItemsToFetch * sizeof(AudioClassID);
 			break;
@@ -1592,7 +1684,7 @@ static OSStatus	PouetLoopback_GetPlugInPropertyData(AudioServerPlugInDriverRef i
 			//	The resource bundle is a path relative to the path of the plug-in's bundle.
 			//	To specify that the plug-in bundle itself should be used, we just return the
 			//	empty string.
-			FailWithAction(inDataSize < sizeof(AudioObjectID), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetPlugInPropertyData: not enough space for the return value of kAudioPlugInPropertyResourceBundle");
+			FailWithAction(inDataSize < sizeof(CFStringRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetPlugInPropertyData: not enough space for the return value of kAudioPlugInPropertyResourceBundle");
 			*((CFStringRef*)outData) = CFSTR("");
 			*outDataSize = sizeof(CFStringRef);
 			break;
@@ -1950,6 +2042,7 @@ static OSStatus	PouetLoopback_GetBoxPropertyData(AudioServerPlugInDriverRef inDr
 			FailWithAction(inDataSize < sizeof(CFStringRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetBoxPropertyData: not enough space for the return value of kAudioObjectPropertyManufacturer for the box");
 
 			*((CFStringRef*)outData) = get_box_uid();
+			*outDataSize = sizeof(CFStringRef);
 			break;
 			
 		case kAudioBoxPropertyTransportType:
@@ -2085,6 +2178,10 @@ static OSStatus	PouetLoopback_SetBoxPropertyData(AudioServerPlugInDriverRef inDr
 					CFRelease(gBox_Name);
 				}
 				gBox_Name = *theNewName;
+				if(gBox_Name != NULL)
+				{
+					gPlugIn_Host->WriteToStorage(gPlugIn_Host, CFSTR("box name"), gBox_Name);
+				}
 				pthread_mutex_unlock(&gPlugIn_StateMutex);
 				*outNumberPropertiesChanged = 1;
 				outChangedAddresses[0].mSelector = kAudioObjectPropertyName;
@@ -2696,33 +2793,21 @@ static OSStatus	PouetLoopback_GetDevicePropertyData(AudioServerPlugInDriverRef i
 			//	number is allowed to be smaller than the actual size of the list. In such
 			//	case, only that number of items will be returned
 
-            theNumberItemsToFetch = minimum(inDataSize / sizeof(AudioObjectID), device_control_list_size(inAddress->mScope, inObjectID));
-
-            //    fill out the list with as many objects as requested
+            pthread_mutex_lock(&gPlugIn_StateMutex);
             switch (inObjectID) {
                 case kObjectID_Device:
-                    pthread_mutex_lock(&gPlugIn_StateMutex);
-                    for (UInt32 i = 0, k = 0; k < theNumberItemsToFetch; i++)
-                    {
-                        // TODO remove hack! There must be a better way than looking for a fixed i
-                        if ((kDevice_ObjectList[i].type == kObjectType_Control) && !(!gPitch_Adjust_Enabled && kDevice_ObjectList[i].id==kObjectID_Pitch_Adjust))
-                        {
-                            ((AudioObjectID*)outData)[k++] = kDevice_ObjectList[i].id;
-                        }
-                    }
-                    pthread_mutex_unlock(&gPlugIn_StateMutex);
+                    theNumberItemsToFetch = device_control_list_fill(kDevice_ObjectList, kDevice_ObjectListSize, inAddress->mScope, (AudioObjectID*)outData, inDataSize / sizeof(AudioObjectID));
                     break;
 
                 case kObjectID_Device2:
-                    for (UInt32 i = 0, k = 0; k < theNumberItemsToFetch; i++)
-                    {
-                        if ((kDevice_ObjectList[i].type == kObjectType_Control) && !(!gPitch_Adjust_Enabled && kDevice_ObjectList[i].id==kObjectID_Pitch_Adjust))
-                        {
-                            ((AudioObjectID*)outData)[k++] = kDevice2_ObjectList[i].id;
-                        }
-                    }
+                    theNumberItemsToFetch = device_control_list_fill(kDevice2_ObjectList, kDevice2_ObjectListSize, inAddress->mScope, (AudioObjectID*)outData, inDataSize / sizeof(AudioObjectID));
+                    break;
+
+                default:
+                    theNumberItemsToFetch = 0;
                     break;
             }
+            pthread_mutex_unlock(&gPlugIn_StateMutex);
 
 			//	report how much we wrote
 			*outDataSize = theNumberItemsToFetch * sizeof(AudioObjectID);
@@ -2888,11 +2973,16 @@ static OSStatus	PouetLoopback_SetDevicePropertyData(AudioServerPlugInDriverRef i
 			pthread_mutex_unlock(&gPlugIn_StateMutex);
 			if(*((const Float64*)inData) != theOldSampleRate)
 			{
-				//	we dispatch this so that the change can happen asynchronously
-				dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{ gPlugIn_Host->RequestDeviceConfigurationChange(gPlugIn_Host, kObjectID_Device, ChangeAction_SetSampleRate, NULL); });
+				//	we dispatch this so that the change can happen asynchronously.
+				//	Both devices share one sample rate and clock, so both must be
+				//	stopped and notified — not just the one that was set.
+				dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+					gPlugIn_Host->RequestDeviceConfigurationChange(gPlugIn_Host, kObjectID_Device, ChangeAction_SetSampleRate, NULL);
+					gPlugIn_Host->RequestDeviceConfigurationChange(gPlugIn_Host, kObjectID_Device2, ChangeAction_SetSampleRate, NULL);
+				});
 			}
 			break;
-		
+
 		default:
 			theAnswer = kAudioHardwareUnknownPropertyError;
 			break;
@@ -2916,7 +3006,7 @@ static Boolean	PouetLoopback_HasStreamProperty(AudioServerPlugInDriverRef inDriv
 	//	check the arguments
 	FailIf(inDriver != gAudioServerPlugInDriverRef, Done, "PouetLoopback_HasStreamProperty: bad driver reference");
 	FailIf(inAddress == NULL, Done, "PouetLoopback_HasStreamProperty: no address");
-	FailIf((inObjectID != kObjectID_Stream_Input) && (inObjectID != kObjectID_Stream_Output), Done, "PouetLoopback_HasStreamProperty: not a stream object");
+	FailIf(!is_stream_id(inObjectID), Done, "PouetLoopback_HasStreamProperty: not a stream object");
 	
 	//	Note that for each object, this driver implements all the required properties plus a few
 	//	extras that are useful but not required. There is more detailed commentary about each
@@ -2958,7 +3048,7 @@ static OSStatus	PouetLoopback_IsStreamPropertySettable(AudioServerPlugInDriverRe
 	FailWithAction(inDriver != gAudioServerPlugInDriverRef, theAnswer = kAudioHardwareBadObjectError, Done, "PouetLoopback_IsStreamPropertySettable: bad driver reference");
 	FailWithAction(inAddress == NULL, theAnswer = kAudioHardwareIllegalOperationError, Done, "PouetLoopback_IsStreamPropertySettable: no address");
 	FailWithAction(outIsSettable == NULL, theAnswer = kAudioHardwareIllegalOperationError, Done, "PouetLoopback_IsStreamPropertySettable: no place to put the return value");
-	FailWithAction((inObjectID != kObjectID_Stream_Input) && (inObjectID != kObjectID_Stream_Output), theAnswer = kAudioHardwareBadObjectError, Done, "PouetLoopback_IsStreamPropertySettable: not a stream object");
+	FailWithAction(!is_stream_id(inObjectID), theAnswer = kAudioHardwareBadObjectError, Done, "PouetLoopback_IsStreamPropertySettable: not a stream object");
 	
 	//	Note that for each object, this driver implements all the required properties plus a few
 	//	extras that are useful but not required. There is more detailed commentary about each
@@ -3006,7 +3096,7 @@ static OSStatus	PouetLoopback_GetStreamPropertyDataSize(AudioServerPlugInDriverR
 	FailWithAction(inDriver != gAudioServerPlugInDriverRef, theAnswer = kAudioHardwareBadObjectError, Done, "PouetLoopback_GetStreamPropertyDataSize: bad driver reference");
 	FailWithAction(inAddress == NULL, theAnswer = kAudioHardwareIllegalOperationError, Done, "PouetLoopback_GetStreamPropertyDataSize: no address");
 	FailWithAction(outDataSize == NULL, theAnswer = kAudioHardwareIllegalOperationError, Done, "PouetLoopback_GetStreamPropertyDataSize: no place to put the return value");
-	FailWithAction((inObjectID != kObjectID_Stream_Input) && (inObjectID != kObjectID_Stream_Output), theAnswer = kAudioHardwareBadObjectError, Done, "PouetLoopback_GetStreamPropertyDataSize: not a stream object");
+	FailWithAction(!is_stream_id(inObjectID), theAnswer = kAudioHardwareBadObjectError, Done, "PouetLoopback_GetStreamPropertyDataSize: not a stream object");
 	
 	//	Note that for each object, this driver implements all the required properties plus a few
 	//	extras that are useful but not required. There is more detailed commentary about each
@@ -3081,7 +3171,7 @@ static OSStatus	PouetLoopback_GetStreamPropertyData(AudioServerPlugInDriverRef i
 	FailWithAction(inAddress == NULL, theAnswer = kAudioHardwareIllegalOperationError, Done, "PouetLoopback_GetStreamPropertyData: no address");
 	FailWithAction(outDataSize == NULL, theAnswer = kAudioHardwareIllegalOperationError, Done, "PouetLoopback_GetStreamPropertyData: no place to put the return value size");
 	FailWithAction(outData == NULL, theAnswer = kAudioHardwareIllegalOperationError, Done, "PouetLoopback_GetStreamPropertyData: no place to put the return value");
-	FailWithAction((inObjectID != kObjectID_Stream_Input) && (inObjectID != kObjectID_Stream_Output), theAnswer = kAudioHardwareBadObjectError, Done, "PouetLoopback_GetStreamPropertyData: not a stream object");
+	FailWithAction(!is_stream_id(inObjectID), theAnswer = kAudioHardwareBadObjectError, Done, "PouetLoopback_GetStreamPropertyData: not a stream object");
 	
 	//	Note that for each object, this driver implements all the required properties plus a few
 	//	extras that are useful but not required.
@@ -3107,7 +3197,7 @@ static OSStatus	PouetLoopback_GetStreamPropertyData(AudioServerPlugInDriverRef i
 		case kAudioObjectPropertyOwner:
 			//	The stream's owner is the device object
 			FailWithAction(inDataSize < sizeof(AudioObjectID), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetStreamPropertyData: not enough space for the return value of kAudioObjectPropertyOwner for the stream");
-			*((AudioObjectID*)outData) = kObjectID_Device;
+			*((AudioObjectID*)outData) = is_device2_object_id(inObjectID) ? kObjectID_Device2 : kObjectID_Device;
 			*outDataSize = sizeof(AudioObjectID);
 			break;
 			
@@ -3122,7 +3212,7 @@ static OSStatus	PouetLoopback_GetStreamPropertyData(AudioServerPlugInDriverRef i
 			//	value.
 			FailWithAction(inDataSize < sizeof(UInt32), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetStreamPropertyData: not enough space for the return value of kAudioStreamPropertyIsActive for the stream");
 			pthread_mutex_lock(&gPlugIn_StateMutex);
-			*((UInt32*)outData) = (inObjectID == kObjectID_Stream_Input) ? gStream_Input_IsActive : gStream_Output_IsActive;
+			*((UInt32*)outData) = *stream_active_value_for(inObjectID);
 			pthread_mutex_unlock(&gPlugIn_StateMutex);
 			*outDataSize = sizeof(UInt32);
 			break;
@@ -3130,7 +3220,7 @@ static OSStatus	PouetLoopback_GetStreamPropertyData(AudioServerPlugInDriverRef i
 		case kAudioStreamPropertyDirection:
 			//	This returns whether the stream is an input stream or an output stream.
 			FailWithAction(inDataSize < sizeof(UInt32), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetStreamPropertyData: not enough space for the return value of kAudioStreamPropertyDirection for the stream");
-			*((UInt32*)outData) = (inObjectID == kObjectID_Stream_Input) ? 1 : 0;
+			*((UInt32*)outData) = is_input_stream_id(inObjectID) ? 1 : 0;
 			*outDataSize = sizeof(UInt32);
 			break;
 
@@ -3139,7 +3229,7 @@ static OSStatus	PouetLoopback_GetStreamPropertyData(AudioServerPlugInDriverRef i
 			//	such as a speaker or headphones, or a microphone. Values for this property
 			//	are defined in <CoreAudio/AudioHardwareBase.h>
 			FailWithAction(inDataSize < sizeof(UInt32), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetStreamPropertyData: not enough space for the return value of kAudioStreamPropertyTerminalType for the stream");
-			*((UInt32*)outData) = (inObjectID == kObjectID_Stream_Input) ? kAudioStreamTerminalTypeMicrophone : kAudioStreamTerminalTypeSpeaker;
+			*((UInt32*)outData) = is_input_stream_id(inObjectID) ? kAudioStreamTerminalTypeMicrophone : kAudioStreamTerminalTypeSpeaker;
 			*outDataSize = sizeof(UInt32);
 			break;
 
@@ -3238,7 +3328,7 @@ static OSStatus	PouetLoopback_SetStreamPropertyData(AudioServerPlugInDriverRef i
 	FailWithAction(inAddress == NULL, theAnswer = kAudioHardwareIllegalOperationError, Done, "PouetLoopback_SetStreamPropertyData: no address");
 	FailWithAction(outNumberPropertiesChanged == NULL, theAnswer = kAudioHardwareIllegalOperationError, Done, "PouetLoopback_SetStreamPropertyData: no place to return the number of properties that changed");
 	FailWithAction(outChangedAddresses == NULL, theAnswer = kAudioHardwareIllegalOperationError, Done, "PouetLoopback_SetStreamPropertyData: no place to return the properties that changed");
-	FailWithAction((inObjectID != kObjectID_Stream_Input) && (inObjectID != kObjectID_Stream_Output), theAnswer = kAudioHardwareBadObjectError, Done, "PouetLoopback_SetStreamPropertyData: not a stream object");
+	FailWithAction(!is_stream_id(inObjectID), theAnswer = kAudioHardwareBadObjectError, Done, "PouetLoopback_SetStreamPropertyData: not a stream object");
 	
 	//	initialize the returned number of changed properties
 	*outNumberPropertiesChanged = 0;
@@ -3253,22 +3343,11 @@ static OSStatus	PouetLoopback_SetStreamPropertyData(AudioServerPlugInDriverRef i
 			//	so we can just save the state and send the notification.
 			FailWithAction(inDataSize != sizeof(UInt32), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_SetStreamPropertyData: wrong size for the data for kAudioDevicePropertyNominalSampleRate");
 			pthread_mutex_lock(&gPlugIn_StateMutex);
-			if(inObjectID == kObjectID_Stream_Input)
 			{
-				if(gStream_Input_IsActive != (*((const UInt32*)inData) != 0))
+				bool* theIsActive = stream_active_value_for(inObjectID);
+				if(*theIsActive != (*((const UInt32*)inData) != 0))
 				{
-					gStream_Input_IsActive = *((const UInt32*)inData) != 0;
-					*outNumberPropertiesChanged = 1;
-					outChangedAddresses[0].mSelector = kAudioStreamPropertyIsActive;
-					outChangedAddresses[0].mScope = kAudioObjectPropertyScopeGlobal;
-					outChangedAddresses[0].mElement = kAudioObjectPropertyElementMain;
-				}
-			}
-			else
-			{
-				if(gStream_Output_IsActive != (*((const UInt32*)inData) != 0))
-				{
-					gStream_Output_IsActive = *((const UInt32*)inData) != 0;
+					*theIsActive = *((const UInt32*)inData) != 0;
 					*outNumberPropertiesChanged = 1;
 					outChangedAddresses[0].mSelector = kAudioStreamPropertyIsActive;
 					outChangedAddresses[0].mScope = kAudioObjectPropertyScopeGlobal;
@@ -3301,8 +3380,13 @@ static OSStatus	PouetLoopback_SetStreamPropertyData(AudioServerPlugInDriverRef i
 			pthread_mutex_unlock(&gPlugIn_StateMutex);
 			if(((const AudioStreamBasicDescription*)inData)->mSampleRate != theOldSampleRate)
 			{
-				//	we dispatch this so that the change can happen asynchronously
-				dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{ gPlugIn_Host->RequestDeviceConfigurationChange(gPlugIn_Host, kObjectID_Device, ChangeAction_SetSampleRate, NULL); });
+				//	we dispatch this so that the change can happen asynchronously.
+				//	Both devices share one sample rate and clock, so both must be
+				//	stopped and notified — not just the stream's owner.
+				dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+					gPlugIn_Host->RequestDeviceConfigurationChange(gPlugIn_Host, kObjectID_Device, ChangeAction_SetSampleRate, NULL);
+					gPlugIn_Host->RequestDeviceConfigurationChange(gPlugIn_Host, kObjectID_Device2, ChangeAction_SetSampleRate, NULL);
+				});
 			}
 			break;
 		
@@ -3337,6 +3421,8 @@ static Boolean	PouetLoopback_HasControlProperty(AudioServerPlugInDriverRef inDri
 	{
 		case kObjectID_Volume_Input_Master:
 		case kObjectID_Volume_Output_Master:
+		case kObjectID_Volume_Input_Master2:
+		case kObjectID_Volume_Output_Master2:
 			switch(inAddress->mSelector)
 			{
 				case kAudioObjectPropertyBaseClass:
@@ -3357,6 +3443,8 @@ static Boolean	PouetLoopback_HasControlProperty(AudioServerPlugInDriverRef inDri
 		
 		case kObjectID_Mute_Input_Master:
 		case kObjectID_Mute_Output_Master:
+		case kObjectID_Mute_Input_Master2:
+		case kObjectID_Mute_Output_Master2:
 			switch(inAddress->mSelector)
 			{
 				case kAudioObjectPropertyBaseClass:
@@ -3430,6 +3518,8 @@ static OSStatus	PouetLoopback_IsControlPropertySettable(AudioServerPlugInDriverR
 	{
 		case kObjectID_Volume_Input_Master:
 		case kObjectID_Volume_Output_Master:
+		case kObjectID_Volume_Input_Master2:
+		case kObjectID_Volume_Output_Master2:
 			switch(inAddress->mSelector)
 			{
 				case kAudioObjectPropertyBaseClass:
@@ -3457,6 +3547,8 @@ static OSStatus	PouetLoopback_IsControlPropertySettable(AudioServerPlugInDriverR
 		
 		case kObjectID_Mute_Input_Master:
 		case kObjectID_Mute_Output_Master:
+		case kObjectID_Mute_Input_Master2:
+		case kObjectID_Mute_Output_Master2:
 			switch(inAddress->mSelector)
 			{
 				case kAudioObjectPropertyBaseClass:
@@ -3551,6 +3643,8 @@ static OSStatus	PouetLoopback_GetControlPropertyDataSize(AudioServerPlugInDriver
 	{
 		case kObjectID_Volume_Input_Master:
 		case kObjectID_Volume_Output_Master:
+		case kObjectID_Volume_Input_Master2:
+		case kObjectID_Volume_Output_Master2:
 			switch(inAddress->mSelector)
 			{
 				case kAudioObjectPropertyBaseClass:
@@ -3605,6 +3699,8 @@ static OSStatus	PouetLoopback_GetControlPropertyDataSize(AudioServerPlugInDriver
 		
 		case kObjectID_Mute_Input_Master:
 		case kObjectID_Mute_Output_Master:
+		case kObjectID_Mute_Input_Master2:
+		case kObjectID_Mute_Output_Master2:
 			switch(inAddress->mSelector)
 			{
 				case kAudioObjectPropertyBaseClass:
@@ -3748,6 +3844,8 @@ static OSStatus	PouetLoopback_GetControlPropertyData(AudioServerPlugInDriverRef 
 	{
 		case kObjectID_Volume_Input_Master:
 		case kObjectID_Volume_Output_Master:
+		case kObjectID_Volume_Input_Master2:
+		case kObjectID_Volume_Output_Master2:
 			switch(inAddress->mSelector)
 			{
 				case kAudioObjectPropertyBaseClass:
@@ -3767,7 +3865,7 @@ static OSStatus	PouetLoopback_GetControlPropertyData(AudioServerPlugInDriverRef 
 				case kAudioObjectPropertyOwner:
 					//	The control's owner is the device object
 					FailWithAction(inDataSize < sizeof(AudioObjectID), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetControlPropertyData: not enough space for the return value of kAudioObjectPropertyOwner for the volume control");
-					*((AudioObjectID*)outData) = kObjectID_Device;
+					*((AudioObjectID*)outData) = is_device2_object_id(inObjectID) ? kObjectID_Device2 : kObjectID_Device;
 					*outDataSize = sizeof(AudioObjectID);
 					break;
 					
@@ -3779,7 +3877,7 @@ static OSStatus	PouetLoopback_GetControlPropertyData(AudioServerPlugInDriverRef 
 				case kAudioControlPropertyScope:
 					//	This property returns the scope that the control is attached to.
 					FailWithAction(inDataSize < sizeof(AudioObjectPropertyScope), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetControlPropertyData: not enough space for the return value of kAudioControlPropertyScope for the volume control");
-					*((AudioObjectPropertyScope*)outData) = (inObjectID == kObjectID_Volume_Input_Master) ? kAudioObjectPropertyScopeInput : kAudioObjectPropertyScopeOutput;
+					*((AudioObjectPropertyScope*)outData) = is_input_scoped_control_id(inObjectID) ? kAudioObjectPropertyScopeInput : kAudioObjectPropertyScopeOutput;
 					*outDataSize = sizeof(AudioObjectPropertyScope);
 					break;
 
@@ -3795,7 +3893,7 @@ static OSStatus	PouetLoopback_GetControlPropertyData(AudioServerPlugInDriverRef 
 					//	Note that we need to take the state lock to examine the value.
 					FailWithAction(inDataSize < sizeof(Float32), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetControlPropertyData: not enough space for the return value of kAudioLevelControlPropertyScalarValue for the volume control");
 					pthread_mutex_lock(&gPlugIn_StateMutex);
-					*((Float32*)outData) = volume_to_scalar(gVolume_Master_Value);
+					*((Float32*)outData) = volume_to_scalar(*volume_value_for(inObjectID));
 					pthread_mutex_unlock(&gPlugIn_StateMutex);
 					*outDataSize = sizeof(Float32);
 					break;
@@ -3805,7 +3903,7 @@ static OSStatus	PouetLoopback_GetControlPropertyData(AudioServerPlugInDriverRef 
 					//	Note that we need to take the state lock to examine the value.
 					FailWithAction(inDataSize < sizeof(Float32), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetControlPropertyData: not enough space for the return value of kAudioLevelControlPropertyDecibelValue for the volume control");
 					pthread_mutex_lock(&gPlugIn_StateMutex);
-					*((Float32*)outData) = gVolume_Master_Value;
+					*((Float32*)outData) = *volume_value_for(inObjectID);
 					pthread_mutex_unlock(&gPlugIn_StateMutex);
 					*((Float32*)outData) = volume_to_decibel(*((Float32*)outData));
 					
@@ -3876,6 +3974,8 @@ static OSStatus	PouetLoopback_GetControlPropertyData(AudioServerPlugInDriverRef 
 		
 		case kObjectID_Mute_Input_Master:
 		case kObjectID_Mute_Output_Master:
+		case kObjectID_Mute_Input_Master2:
+		case kObjectID_Mute_Output_Master2:
 			switch(inAddress->mSelector)
 			{
 				case kAudioObjectPropertyBaseClass:
@@ -3895,7 +3995,7 @@ static OSStatus	PouetLoopback_GetControlPropertyData(AudioServerPlugInDriverRef 
 				case kAudioObjectPropertyOwner:
 					//	The control's owner is the device object
 					FailWithAction(inDataSize < sizeof(AudioObjectID), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetControlPropertyData: not enough space for the return value of kAudioObjectPropertyOwner for the mute control");
-					*((AudioObjectID*)outData) = kObjectID_Device;
+					*((AudioObjectID*)outData) = is_device2_object_id(inObjectID) ? kObjectID_Device2 : kObjectID_Device;
 					*outDataSize = sizeof(AudioObjectID);
 					break;
 					
@@ -3907,7 +4007,7 @@ static OSStatus	PouetLoopback_GetControlPropertyData(AudioServerPlugInDriverRef 
 				case kAudioControlPropertyScope:
 					//	This property returns the scope that the control is attached to.
 					FailWithAction(inDataSize < sizeof(AudioObjectPropertyScope), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetControlPropertyData: not enough space for the return value of kAudioControlPropertyScope for the mute control");
-					*((AudioObjectPropertyScope*)outData) = (inObjectID == kObjectID_Mute_Input_Master) ? kAudioObjectPropertyScopeInput : kAudioObjectPropertyScopeOutput;
+					*((AudioObjectPropertyScope*)outData) = is_input_scoped_control_id(inObjectID) ? kAudioObjectPropertyScopeInput : kAudioObjectPropertyScopeOutput;
 					*outDataSize = sizeof(AudioObjectPropertyScope);
 					break;
 
@@ -3924,7 +4024,7 @@ static OSStatus	PouetLoopback_GetControlPropertyData(AudioServerPlugInDriverRef 
 					//	Note that we need to take the state lock to examine this value.
 					FailWithAction(inDataSize < sizeof(UInt32), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_GetControlPropertyData: not enough space for the return value of kAudioBooleanControlPropertyValue for the mute control");
 					pthread_mutex_lock(&gPlugIn_StateMutex);
-					*((UInt32*)outData) = gMute_Master_Value ? 1 : 0;
+					*((UInt32*)outData) = *mute_value_for(inObjectID) ? 1 : 0;
 					pthread_mutex_unlock(&gPlugIn_StateMutex);
 					*outDataSize = sizeof(UInt32);
 					break;
@@ -4129,6 +4229,8 @@ static OSStatus	PouetLoopback_SetControlPropertyData(AudioServerPlugInDriverRef 
 	{
 		case kObjectID_Volume_Input_Master:
 		case kObjectID_Volume_Output_Master:
+		case kObjectID_Volume_Input_Master2:
+		case kObjectID_Volume_Output_Master2:
 			switch(inAddress->mSelector)
 			{
 				case kAudioLevelControlPropertyScalarValue:
@@ -4145,9 +4247,9 @@ static OSStatus	PouetLoopback_SetControlPropertyData(AudioServerPlugInDriverRef 
 						theNewVolume = 1.0;
 					}
 					pthread_mutex_lock(&gPlugIn_StateMutex);
-                    if(gVolume_Master_Value != theNewVolume)
+                    if(*volume_value_for(inObjectID) != theNewVolume)
                     {
-                        gVolume_Master_Value = theNewVolume;
+                        *volume_value_for(inObjectID) = theNewVolume;
                         *outNumberPropertiesChanged = 2;
                         outChangedAddresses[0].mSelector = kAudioLevelControlPropertyScalarValue;
                         outChangedAddresses[0].mScope = kAudioObjectPropertyScopeGlobal;
@@ -4175,9 +4277,9 @@ static OSStatus	PouetLoopback_SetControlPropertyData(AudioServerPlugInDriverRef 
 					}
 					theNewVolume = volume_from_decibel(theNewVolume);
 					pthread_mutex_lock(&gPlugIn_StateMutex);
-                    if(gVolume_Master_Value != theNewVolume)
+                    if(*volume_value_for(inObjectID) != theNewVolume)
                     {
-                        gVolume_Master_Value = theNewVolume;
+                        *volume_value_for(inObjectID) = theNewVolume;
                         *outNumberPropertiesChanged = 2;
                         outChangedAddresses[0].mSelector = kAudioLevelControlPropertyScalarValue;
                         outChangedAddresses[0].mScope = kAudioObjectPropertyScopeGlobal;
@@ -4197,14 +4299,16 @@ static OSStatus	PouetLoopback_SetControlPropertyData(AudioServerPlugInDriverRef 
 		
 		case kObjectID_Mute_Input_Master:
 		case kObjectID_Mute_Output_Master:
+		case kObjectID_Mute_Input_Master2:
+		case kObjectID_Mute_Output_Master2:
 			switch(inAddress->mSelector)
 			{
 				case kAudioBooleanControlPropertyValue:
 					FailWithAction(inDataSize != sizeof(UInt32), theAnswer = kAudioHardwareBadPropertySizeError, Done, "PouetLoopback_SetControlPropertyData: wrong size for the data for kAudioBooleanControlPropertyValue");
 					pthread_mutex_lock(&gPlugIn_StateMutex);
-                    if(gMute_Master_Value != (*((const UInt32*)inData) != 0))
+                    if(*mute_value_for(inObjectID) != (*((const UInt32*)inData) != 0))
                     {
-                        gMute_Master_Value = *((const UInt32*)inData) != 0;
+                        *mute_value_for(inObjectID) = *((const UInt32*)inData) != 0;
                         *outNumberPropertiesChanged = 1;
                         outChangedAddresses[0].mSelector = kAudioBooleanControlPropertyValue;
                         outChangedAddresses[0].mScope = kAudioObjectPropertyScopeGlobal;
@@ -4346,16 +4450,19 @@ static OSStatus	PouetLoopback_StartIO(AudioServerPlugInDriverRef inDriver, Audio
         gRingBuffer2 = calloc(kRing_Buffer_Frame_Size * kNumber_Of_Channels, sizeof(Float32));
     }
 
-    if (inDeviceObjectID == kObjectID_Device && gRingBuffer != NULL)
+    //	Only clear on the FIRST client start for this device: a later client's
+    //	StartIO would otherwise zero the buffer while the device's IO thread is
+    //	concurrently reading/writing it lock-free
+    if (inDeviceObjectID == kObjectID_Device && gDevice_IOIsRunning == 1 && gRingBuffer != NULL)
     {
         vDSP_vclr(gRingBuffer, 1, kRing_Buffer_Frame_Size * kNumber_Of_Channels);
     }
-    if (inDeviceObjectID == kObjectID_Device2 && gRingBuffer2 != NULL)
+    if (inDeviceObjectID == kObjectID_Device2 && gDevice2_IOIsRunning == 1 && gRingBuffer2 != NULL)
     {
         vDSP_vclr(gRingBuffer2, 1, kRing_Buffer_Frame_Size * kNumber_Of_Channels);
     }
-    
-    
+
+
 	//	unlock the state lock
 	pthread_mutex_unlock(&gPlugIn_StateMutex);
 	
@@ -4540,7 +4647,7 @@ static OSStatus	PouetLoopback_DoIOOperation(AudioServerPlugInDriverRef inDriver,
 	//	check the arguments
 	FailWithAction(inDriver != gAudioServerPlugInDriverRef, theAnswer = kAudioHardwareBadObjectError, Done, "PouetLoopback_DoIOOperation: bad driver reference");
 	FailWithAction(inDeviceObjectID != kObjectID_Device && inDeviceObjectID != kObjectID_Device2, theAnswer = kAudioHardwareBadObjectError, Done, "PouetLoopback_DoIOOperation: bad device ID");
-	FailWithAction((inStreamObjectID != kObjectID_Stream_Input) && (inStreamObjectID != kObjectID_Stream_Output), theAnswer = kAudioHardwareBadObjectError, Done, "PouetLoopback_DoIOOperation: bad stream ID");
+	FailWithAction(!is_stream_id(inStreamObjectID), theAnswer = kAudioHardwareBadObjectError, Done, "PouetLoopback_DoIOOperation: bad stream ID");
 
     // Calculate the ring buffer offsets and splits.
     UInt64 mSampleTime = inOperationID == kAudioServerPlugInIOOperationReadInput ? inIOCycleInfo->mInputTime.mSampleTime : inIOCycleInfo->mOutputTime.mSampleTime;
@@ -4567,6 +4674,8 @@ static OSStatus	PouetLoopback_DoIOOperation(AudioServerPlugInDriverRef inDriver,
     Float32* ringBuf = (inDeviceObjectID == kObjectID_Device2) ? gRingBuffer2 : gRingBuffer;
     Float64* lastOutTime = (inDeviceObjectID == kObjectID_Device2) ? &lastOutputSampleTime2 : &lastOutputSampleTime;
     Boolean* bufClear = (inDeviceObjectID == kObjectID_Device2) ? &isBufferClear2 : &isBufferClear;
+    Float32 deviceVolume = (inDeviceObjectID == kObjectID_Device2) ? gVolume2_Master_Value : gVolume_Master_Value;
+    bool deviceMute = (inDeviceObjectID == kObjectID_Device2) ? gMute2_Master_Value : gMute_Master_Value;
 
     if (ringBuf == NULL) goto Done;
 
@@ -4574,7 +4683,7 @@ static OSStatus	PouetLoopback_DoIOOperation(AudioServerPlugInDriverRef inDriver,
     if(inOperationID == kAudioServerPlugInIOOperationReadInput)
     {
         // If mute is on let's just fill the buffer with zeros or if there's no apps outputting audio
-        if (gMute_Master_Value || *lastOutTime - inIOBufferFrameSize < inIOCycleInfo->mInputTime.mSampleTime)
+        if (deviceMute || *lastOutTime - inIOBufferFrameSize < inIOCycleInfo->mInputTime.mSampleTime)
         {
             // Clear the ioMainBuffer
             vDSP_vclr(ioMainBuffer, 1, inIOBufferFrameSize * kNumber_Of_Channels);
@@ -4595,7 +4704,7 @@ static OSStatus	PouetLoopback_DoIOOperation(AudioServerPlugInDriverRef inDriver,
             // Finally we'll apply the output volume to the buffer.
 	    if(kEnableVolumeControl)
 	    {
-	 	vDSP_vsmul(ioMainBuffer, 1, &gVolume_Master_Value, ioMainBuffer, 1, inIOBufferFrameSize * kNumber_Of_Channels);
+	 	vDSP_vsmul(ioMainBuffer, 1, &deviceVolume, ioMainBuffer, 1, inIOBufferFrameSize * kNumber_Of_Channels);
 	    }
 
         }

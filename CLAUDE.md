@@ -113,6 +113,7 @@ Tests are C-based, following the BlackHole pattern. No Xcode or XCTest needed.
 make test                # run all tests
 make test-loopback       # driver unit tests (no install needed)
 make test-integration    # device property tests (requires installed driver)
+make test-e2e            # end-to-end audio path tests (requires installed driver + mic permission)
 ```
 
 **Loopback tests** (`Tests/test_loopback.c`): Compile the driver source directly (`#include "../Driver/PouetLoopback.c"`) and call driver functions in-process. Tests:
@@ -122,6 +123,8 @@ make test-integration    # device property tests (requires installed driver)
 - Data integrity: sample-perfect round-trip
 
 **Integration tests** (`Tests/test_integration.c`): Test both devices' CoreAudio properties (sample rate, streams, format) against the installed driver.
+
+**End-to-end audio tests** (`Tests/test_e2e_audio.swift`): Drive real audio through the installed driver and the app's `AudioService` proxies, using the virtual devices as stand-ins for hardware (PouetSpeaker plays the "real mic", PouetMicrophone plays the "real speakers"). A sine tone is pushed through each path — mic proxy, soundboard injection, speaker-proxy monitoring, dashcam snapshot, both proxies concurrently — and verified by RMS + zero-crossing frequency. Test signal generation/verification uses raw HAL IOProcs, never `AVAudioEngine.inputNode` (multiple input nodes in one process silently deliver zeros — the same reason `AudioService` captures via raw HAL IOProcs).
 
 ## Release
 

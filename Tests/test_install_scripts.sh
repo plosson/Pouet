@@ -17,12 +17,14 @@ run_test() {
     fi
 }
 
+# grep, not rg: rg is not preinstalled on macOS/CI, and a missing rg would make
+# the negated assertion pass vacuously
 assert_no_force_kill() {
-    ! rg -n 'killall -9 coreaudiod' Makefile Sources/Pouet/UI/ContentView.swift >/dev/null
+    ! grep -nE 'killall -9 coreaudiod' Makefile Sources/Pouet/UI/ContentView.swift >/dev/null
 }
 
 assert_uses_graceful_restart() {
-    rg -n 'launchctl kickstart -kp system/com.apple.audio.coreaudiod' \
+    grep -nE 'launchctl kickstart -kp system/com.apple.audio.coreaudiod' \
         Installer/scripts/postinstall \
         Uninstaller/uninstall.sh \
         Sources/Pouet/UI/ContentView.swift \

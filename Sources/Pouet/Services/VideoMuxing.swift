@@ -46,10 +46,19 @@ func muxVideoSegments(
         if let audioTrack = audioTracks.first(where: { $0.mediaType == .audio }) {
             let compositionAudioTrack = composition.addMutableTrack(
                 withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
-            let muxDuration = CMTimeMinimum(videoDuration, audioDuration)
-            try compositionAudioTrack?.insertTimeRange(
-                CMTimeRange(start: .zero, duration: muxDuration),
-                of: audioTrack, at: .zero)
+            // Both sources are rolling "last N seconds" buffers that end at the
+            // snapshot moment, so align their tails, not their heads.
+            if audioDuration >= videoDuration {
+                let start = CMTimeSubtract(audioDuration, videoDuration)
+                try compositionAudioTrack?.insertTimeRange(
+                    CMTimeRange(start: start, duration: videoDuration),
+                    of: audioTrack, at: .zero)
+            } else {
+                let offset = CMTimeSubtract(videoDuration, audioDuration)
+                try compositionAudioTrack?.insertTimeRange(
+                    CMTimeRange(start: .zero, duration: audioDuration),
+                    of: audioTrack, at: offset)
+            }
         }
     }
 

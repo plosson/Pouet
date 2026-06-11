@@ -5,6 +5,7 @@ import Foundation
 import ScreenCaptureKit
 import AVFoundation
 import AppKit
+import os
 
 // MARK: - Data Model
 
@@ -26,7 +27,12 @@ class VideoService: ObservableObject {
     @Published var availableWindows: [WindowInfo] = []
     @Published var selectedWindowID: CGWindowID?
     @Published var isCapturing = false
-    @Published var bufferDurationSeconds: Double = 5.0
+    @Published var bufferDurationSeconds: Double = 5.0 {
+        didSet {
+            let value = bufferDurationSeconds
+            writerQueue.async { [weak self] in self?.writerBufferDuration = value }
+        }
+    }
     @Published var recentVideoSnapshots: [URL] = []
 
     var snapshotsDir: String = ""
@@ -42,7 +48,7 @@ class VideoService: ObservableObject {
     private var segmentWriter: AVAssetWriter?
     private var segmentVideoInput: AVAssetWriterInput?
     private var segmentStartTime: CMTime?
-    private var firstSampleTime: CMTime?
+    private var writerBufferDuration: Double = 5.0
     private var captureWidth: Int = 1920
     private var captureHeight: Int = 1080
     private let writerQueue = DispatchQueue(label: "com.pouet.video.writer")
@@ -120,8 +126,12 @@ class VideoService: ObservableObject {
     // MARK: - Capture
 
     func startCapture() async throws {
-        guard let windowID = selectedWindowID,
-              let windowInfo = availableWindows.first(where: { $0.id == windowID }) else {
+        // Published state is owned by the main actor; don't read it off-main
+        let selection: WindowInfo? = await MainActor.run {
+            guard let windowID = selectedWindowID else { return nil }
+            return availableWindows.first(where: { $0.id == windowID })
+        }
+        guard let windowInfo = selection else {
             throw VideoError.noWindowSelected
         }
 
@@ -152,7 +162,6 @@ class VideoService: ObservableObject {
         captureWidth = config.width
         captureHeight = config.height
         stream = newStream
-        firstSampleTime = nil
         try await newStream.startCapture()
 
         await MainActor.run {
@@ -181,16 +190,21 @@ class VideoService: ObservableObject {
     // MARK: - Segment Management (called on writerQueue)
 
     fileprivate func handleSampleBuffer(_ sampleBuffer: CMSampleBuffer, ofType type: SCStreamOutputType) {
+        // SCK also delivers status-only buffers (.idle/.blank) with no image;
+        // appending one would fail the writer and silently kill the segment
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(
+                  sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+              let statusRaw = attachments.first?[.status] as? Int,
+              SCFrameStatus(rawValue: statusRaw) == .complete,
+              CMSampleBufferGetImageBuffer(sampleBuffer) != nil else {
+            return
+        }
+
         writerQueue.async { [weak self] in
             guard let self = self else { return }
 
             let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             guard pts.isValid && !pts.isIndefinite else { return }
-
-            // Track first sample time for relative timestamps
-            if self.firstSampleTime == nil {
-                self.firstSampleTime = pts
-            }
 
             // Start a new segment if needed
             if self.segmentWriter == nil {
@@ -219,17 +233,34 @@ class VideoService: ObservableObject {
 
     /// Save a video snapshot, muxing in external audio from the dashcam buffer.
     func saveSnapshot(audioURL: URL? = nil) async -> (url: URL?, error: String?) {
+        // Copy segment files to a private dir: capture keeps rotating while the
+        // mux reads, and trimOldSegments would delete files out from under it.
+        // Outside tempDir so stopCapture's cleanup can't remove it either.
+        let snapshotDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PouetVideoSnapshot-\(ProcessInfo.processInfo.globallyUniqueString)")
         let segmentsCopy: [URL] = writerQueue.sync {
             finalizeCurrentSegment()
-            return Array(segments)
+            guard !segments.isEmpty else { return [] }
+            do {
+                try FileManager.default.createDirectory(at: snapshotDir, withIntermediateDirectories: true)
+                return try segments.map { url in
+                    let dest = snapshotDir.appendingPathComponent(url.lastPathComponent)
+                    try FileManager.default.copyItem(at: url, to: dest)
+                    return dest
+                }
+            } catch {
+                Log.error("Failed to copy segments for snapshot: \(error)")
+                return []
+            }
         }
+        defer { try? FileManager.default.removeItem(at: snapshotDir) }
 
         guard !segmentsCopy.isEmpty else {
             return (nil, "No video data captured")
         }
 
         let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss-SSS"
         let filename = "pouet-video-\(formatter.string(from: Date())).mp4"
         let outputURL = URL(fileURLWithPath: (snapshotsDir as NSString).appendingPathComponent(filename))
 
@@ -279,18 +310,26 @@ class VideoService: ObservableObject {
         guard let writer = segmentWriter else { return }
         segmentVideoInput?.markAsFinished()
 
+        // cancelWriting must not race an in-flight finishWriting; on timeout we
+        // just abandon the segment and let the late completion delete the file
+        let url = writer.outputURL
+        let timedOutFlag = OSAllocatedUnfairLock(initialState: false)
         let semaphore = DispatchSemaphore(value: 0)
-        writer.finishWriting { semaphore.signal() }
-        let result = semaphore.wait(timeout: .now() + 3.0)
+        writer.finishWriting {
+            if timedOutFlag.withLock({ $0 }) {
+                try? FileManager.default.removeItem(at: url)
+            }
+            semaphore.signal()
+        }
 
-        if result == .timedOut {
-            Log.error("Segment finalization timed out, cancelling writer")
-            writer.cancelWriting()
+        if semaphore.wait(timeout: .now() + 3.0) == .timedOut {
+            timedOutFlag.withLock { $0 = true }
+            Log.error("Segment finalization timed out, segment discarded")
         } else if writer.status == .completed {
-            segments.append(writer.outputURL)
+            segments.append(url)
         } else if let error = writer.error {
             Log.error("Segment finalization error: \(error)")
-            try? FileManager.default.removeItem(at: writer.outputURL)
+            try? FileManager.default.removeItem(at: url)
         }
 
         segmentWriter = nil
@@ -299,7 +338,7 @@ class VideoService: ObservableObject {
     }
 
     private func trimOldSegments() {
-        let maxSegments = Int(bufferDurationSeconds / segmentDuration)
+        let maxSegments = Int(writerBufferDuration / segmentDuration)
         while segments.count > maxSegments {
             let old = segments.removeFirst()
             try? FileManager.default.removeItem(at: old)
@@ -330,9 +369,8 @@ private class VideoStreamOutput: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         Log.error("SCStream stopped with error: \(error)")
-        Task { @MainActor in
-            service?.isCapturing = false
-        }
+        // Full teardown: finalize the open segment, clean temp files, reset state
+        Task { await service?.stopCapture() }
     }
 }
 

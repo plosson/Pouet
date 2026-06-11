@@ -30,6 +30,12 @@ class FloatingHUD {
             let stack = NSStackView(views: [icon, label])
             stack.spacing = 8
             stack.edgeInsets = NSEdgeInsets(top: 12, left: 20, bottom: 12, right: 20)
+            // Style the stack itself: it replaces the content view, so any layer
+            // set up in createPanel() is discarded here
+            stack.wantsLayer = true
+            stack.layer?.backgroundColor = NSColor(white: 0.12, alpha: 0.92).cgColor
+            stack.layer?.cornerRadius = 14
+            stack.layer?.masksToBounds = true
 
             panel.contentView = stack
 
@@ -73,14 +79,11 @@ class FloatingHUD {
         )
         panel.isFloatingPanel = true
         panel.level = .floating
-        panel.backgroundColor = NSColor(white: 0.12, alpha: 0.92)
+        panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isMovableByWindowBackground = false
-        panel.contentView?.wantsLayer = true
-        panel.contentView?.layer?.cornerRadius = 14
-        panel.contentView?.layer?.masksToBounds = true
         return panel
     }
 }
