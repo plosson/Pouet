@@ -25,6 +25,20 @@ import AudioToolbox
 // nodes in one process are unreliable (the second one delivers silence), and
 // this harness must not interfere with the AudioService engines under test.
 
+/// Pin a device's volume + mute on a scope to unity, so absolute-amplitude
+/// assertions don't depend on the OS volume slider's current position.
+private func pinVolume(_ deviceID: AudioDeviceID, input: Bool) {
+    let scope = input ? kAudioDevicePropertyScopeInput : kAudioDevicePropertyScopeOutput
+    var volAddr = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyVolumeScalar, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+    var vol: Float32 = 1.0
+    _ = AudioObjectSetPropertyData(deviceID, &volAddr, 0, nil, UInt32(MemoryLayout<Float32>.size), &vol)
+    var muteAddr = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyMute, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+    var mute: UInt32 = 0
+    _ = AudioObjectSetPropertyData(deviceID, &muteAddr, 0, nil, UInt32(MemoryLayout<UInt32>.size), &mute)
+}
+
 private func deviceStreamFormat(_ deviceID: AudioDeviceID, input: Bool) throws -> AudioStreamBasicDescription {
     var addr = AudioObjectPropertyAddress(
         mSelector: kAudioDevicePropertyStreamFormat,
@@ -242,7 +256,7 @@ private func analyzeTone(_ samples: [Float], sampleRate: Double, expectedFrequen
 /// The full fidelity gate: present, right pitch, right level, clean, gapless.
 private func assertTone(_ samples: [Float], sampleRate: Double,
                         expectedFrequency: Double, label: String,
-                        amplitudeRange: ClosedRange<Double> = 0.4...1.2) throws {
+                        amplitudeRange: ClosedRange<Double> = 0.6...1.0) throws {
     let tone = analyzeTone(samples, sampleRate: sampleRate, expectedFrequency: expectedFrequency)
     try assert(tone.rms > 0.05,
                "\(label): expected signal, got RMS \(tone.rms)")
@@ -366,6 +380,13 @@ struct E2EAudioTests {
               let pouetMicID = audio.findDeviceByUID("PouetMicrophone") else {
             print("ABORT: could not resolve virtual device IDs")
             exit(2)
+        }
+
+        // Pin both virtual devices to unity gain so amplitude is deterministic
+        // regardless of the OS input/output volume sliders
+        for input in [true, false] {
+            pinVolume(pouetMicID, input: input)
+            pinVolume(pouetSpeakerID, input: input)
         }
 
         let tempDir = FileManager.default.temporaryDirectory
@@ -500,7 +521,7 @@ struct E2EAudioTests {
             // so the amplitude is roughly doubled)
             try assertTone(capture.snapshot(), sampleRate: capture.sampleRate,
                            expectedFrequency: 440, label: "concurrent proxies",
-                           amplitudeRange: 0.4...2.0)
+                           amplitudeRange: 1.2...2.0)
             try assert(audio.isProxyRunning, "mic proxy should still be running")
             try assert(audio.isSpeakerProxyRunning, "speaker proxy should still be running")
         }

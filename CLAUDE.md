@@ -114,6 +114,7 @@ make test                # run all tests
 make test-loopback       # driver unit tests (no install needed)
 make test-integration    # device property tests (requires installed driver)
 make test-e2e            # end-to-end audio path tests (requires installed driver + mic permission)
+make test-live           # launch the real app, verify the Meet-facing contract (driver + mic permission + audible speakers)
 ```
 
 **Loopback tests** (`Tests/test_loopback.c`): Compile the driver source directly (`#include "../Driver/PouetLoopback.c"`) and call driver functions in-process. Tests:
@@ -124,7 +125,9 @@ make test-e2e            # end-to-end audio path tests (requires installed drive
 
 **Integration tests** (`Tests/test_integration.c`): Test both devices' CoreAudio properties (sample rate, streams, format) against the installed driver.
 
-**End-to-end audio tests** (`Tests/test_e2e_audio.swift`): Drive real audio through the installed driver and the app's `AudioService` proxies, using the virtual devices as stand-ins for hardware (PouetSpeaker plays the "real mic", PouetMicrophone plays the "real speakers"). A sine tone is pushed through each path — mic proxy, soundboard injection, speaker-proxy monitoring, dashcam snapshot, both proxies concurrently — and verified by RMS + zero-crossing frequency. Test signal generation/verification uses raw HAL IOProcs, never `AVAudioEngine.inputNode` (multiple input nodes in one process silently deliver zeros — the same reason `AudioService` captures via raw HAL IOProcs).
+**End-to-end audio tests** (`Tests/test_e2e_audio.swift`): Drive real audio through the installed driver and the app's `AudioService` proxies, using the virtual devices as stand-ins for hardware (PouetSpeaker plays the "real mic", PouetMicrophone plays the "real speakers"). A sine tone is pushed through each path — mic proxy, soundboard injection, speaker-proxy monitoring, dashcam snapshot, both proxies concurrently — and verified for fidelity, not just presence: a per-chunk quadrature sine-fit measures tone SNR (catches clipping/distortion/glitches), a dropout scan catches silent gaps, and amplitude is checked for unity gain (the virtual devices are pinned to volume 1.0 at setup so this is independent of the OS volume slider). Signal generation/verification uses raw HAL IOProcs, never `AVAudioEngine.inputNode` (multiple input nodes in one process silently deliver zeros — the same reason `AudioService` captures via raw HAL IOProcs). Note: this test must run with no Pouet.app instance active, since a running app contends for the same virtual devices.
+
+**Live app test** (`Tests/test_app_live.swift`): The automated equivalent of "call someone and ask if they hear you", without a second person or a real call. Launches the real `Pouet.app` and asserts the contract a Meet/Zoom client actually depends on: (1) the system default input/output switch to PouetMicrophone/PouetSpeaker (the takeover — a silent failure here = a silent call), (2) an acoustic loop works — `say` plays to the default output, travels speakers → room → mic → both proxies → default input, and must register well above ambient (i.e. the other side would hear you), (3) defaults are restored to real devices on quit. Requires the driver installed, the app holding mic permission, and audible speakers, so it is a pre-release smoke test on a real machine, not a CI check. For a fully headless variant (no speakers), a WebRTC bot peer joining a call and reading `getStats()` audio energy is the next step up.
 
 ## Release
 

@@ -104,6 +104,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var config: AppConfig
     private var pollTimer: Timer?
     private var routingCoordinator = RoutingCoordinator()
+    private var routingTakeoverDone = false
     private var didShutdown = false
     private let sleepWakeMonitor = SleepWakeMonitor()
     private var terminateObserver: NSObjectProtocol?
@@ -162,19 +163,28 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
             self?.handleRuntimeRoutingFailure(reason: reason)
         }
 
-        // Auto-start proxies: saved device or system default
-        let micName = config.selectedDevice
-            ?? audio.defaultDevice(input: true)?.name
-        let micReady = micName.map(selectMicDevice(_:)) ?? false
+        // Auto-start proxies: saved device, falling back to the system default
+        // when the saved one is gone (e.g. headphones from last session unplugged)
+        var micReady = config.selectedDevice.map(selectMicDevice(_:)) ?? false
+        if !micReady, let fallback = audio.defaultDevice(input: true)?.name {
+            if config.selectedDevice != nil {
+                Log.warn("Saved mic device unavailable, falling back to \(fallback)")
+            }
+            micReady = selectMicDevice(fallback)
+        }
 
-        let outputName = config.selectedOutputDevice
-            ?? audio.defaultDevice(input: false)?.name
-        let outputReady = outputName.map(selectOutputDevice(_:)) ?? false
+        var outputReady = config.selectedOutputDevice.map(selectOutputDevice(_:)) ?? false
+        if !outputReady, let fallback = audio.defaultDevice(input: false)?.name {
+            if config.selectedOutputDevice != nil {
+                Log.warn("Saved output device unavailable, falling back to \(fallback)")
+            }
+            outputReady = selectOutputDevice(fallback)
+        }
 
         config.save()
 
-        if !applyAutomaticRoutingTakeover(micReady: micReady, outputReady: outputReady) {
-            Log.warn("Automatic routing takeover skipped or rolled back")
+        if !attemptRoutingTakeoverIfReady() {
+            Log.warn("Automatic routing takeover skipped — select working devices to enable it")
         }
 
         startPolling()
@@ -219,6 +229,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         Task { await video.stopCapture() }
 
         restoreRoutingOnShutdown()
+        routingTakeoverDone = false
 
         sleepWakeMonitor.stop()
 
@@ -264,6 +275,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
             selectedDevice = device.name
             config.selectedDevice = device.name
             config.save()
+            attemptRoutingTakeoverIfReady()
             return true
         } catch {
             Log.error("Mic proxy failed: \(error)")
@@ -287,6 +299,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
             config.selectedOutputDevice = device.name
             config.save()
             Log.info("Speaker proxy started: \(device.name) (buffer: \(dashcamBufferSeconds)s)")
+            attemptRoutingTakeoverIfReady()
             return true
         } catch {
             Log.error("Speaker proxy start failed: \(error)")
@@ -598,17 +611,20 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         applyPersistenceState(persistence)
     }
 
-    private func applyAutomaticRoutingTakeover(micReady: Bool, outputReady: Bool) -> Bool {
-        guard micReady, outputReady else {
-            return false
-        }
+    /// Switch the system defaults to the Pouet virtual devices once BOTH
+    /// proxies are running. Re-invoked after manual device selection so a
+    /// launch with stale/missing devices still takes over once fixed.
+    @discardableResult
+    private func attemptRoutingTakeoverIfReady() -> Bool {
+        if routingTakeoverDone { return true }
+        guard isRunning, proxyRunning, speakerProxyRunning else { return false }
         if routingCoordinator.applyAutomaticTakeover(audio: audio) {
             Log.info("System defaults switched to Pouet virtual devices")
-            return true
+            routingTakeoverDone = true
         } else {
             rollbackRoutingAfterStartupFailure()
-            return false
         }
+        return routingTakeoverDone
     }
 
     private func rollbackRoutingAfterStartupFailure() {
@@ -635,6 +651,7 @@ class AppService: NSObject, ObservableObject, AVAudioPlayerDelegate {
         routingCoordinator.restoreAfterRuntimeFailure(persistence: &persistence, audio: audio)
         applyPersistenceState(persistence)
         config.save()
+        routingTakeoverDone = false
         proxyRunning = false
         speakerProxyRunning = false
         proxyDeviceName = nil

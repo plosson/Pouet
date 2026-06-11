@@ -54,7 +54,7 @@ CFLAGS        = -arch arm64 -arch x86_64 \
                 -framework Accelerate
 
 # ============================================================
-.PHONY: all run driver gui uninstaller sign pkg install uninstall clean test test-integration test-e2e test-loopback test-mux test-routing test-routing-coordinator test-install-scripts test-platform-targets
+.PHONY: all run driver gui uninstaller sign pkg install uninstall clean test test-integration test-e2e test-live test-loopback test-mux test-routing test-routing-coordinator test-install-scripts test-platform-targets
 
 all: driver gui uninstaller
 
@@ -194,6 +194,16 @@ test-integration: Tests/test_integration.c
 	    Tests/test_integration.c
 	@echo "--- Integration tests (requires installed driver) ---"
 	./build/test_integration
+
+# Live app test: launches the REAL app and verifies the contract a Meet-like
+# client sees — defaults switch to Pouet devices, speech played through the
+# machine acoustically reaches the default input, defaults restored on quit.
+# Requires installed driver, mic permission, audible speakers.
+test-live: gui Tests/test_app_live.swift
+	@mkdir -p build
+	swiftc -O -parse-as-library -o build/test_app_live Tests/test_app_live.swift
+	@echo "--- Live app tests (launches the real app, speaks through the speakers) ---"
+	./build/test_app_live
 
 # End-to-end audio path tests: drive real audio through the installed driver
 # and the app's AVAudioEngine proxies, using the virtual devices as stand-ins
